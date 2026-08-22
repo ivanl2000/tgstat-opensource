@@ -1,0 +1,1 @@
+"""tgstat-opensource — Веб-интерфейс"""

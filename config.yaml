@@ -1,0 +1,28 @@
+# tgstat-opensource — конфигурация
+# Скопируй в config.local.yaml и заполни
+
+telegram:
+  api_id: ~          # из env или тут
+  api_hash: ~
+  phone: ~
+
+database:
+  url: "sqlite+aiosqlite:///data/tgstat.db"
+  echo: false         # SQL-логи
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+collector:
+  # Каналы для мониторинга (username или invite link)
+  channels:
+    # - "@channel_name"
+    # - "https://t.me/channel_name"
+  fetch_interval_minutes: 60        # Как часто обновлять
+  messages_per_run: 200             # Сколько сообщений за раз
+  history_depth_days: 7             # На сколько дней назад при первом сборе
+
+analytics:
+  engagement_window_hours: 24       # Окно для ER
+  top_mentions_limit: 100           # Сколько сохранять топ-упоминаний

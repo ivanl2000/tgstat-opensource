@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tgstat-opensource — Дашборд</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #222; }
+        .header { background: #1a1a2e; color: #fff; padding: 24px 32px; }
+        .header h1 { font-size: 24px; }
+        .header span { color: #e94560; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        .card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        .card h2 { font-size: 18px; margin-bottom: 16px; color: #1a1a2e; }
+        .card.full { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { color: #666; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+        tr:hover { background: #f8f9fa; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .badge.views { background: #e3f2fd; color: #1565c0; }
+        .badge.er { background: #e8f5e9; color: #2e7d32; }
+        .badge.posts { background: #fff3e0; color: #e65100; }
+        .btn { display: inline-block; padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; }
+        .btn-primary { background: #e94560; color: #fff; }
+        .btn-primary:hover { background: #d63850; }
+        .btn-secondary { background: #eee; color: #333; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .flex { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .mb-16 { margin-bottom: 16px; }
+        .mt-16 { margin-top: 16px; }
+        input[type="text"] { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; width: 200px; }
+        select { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; background: #fff; }
+        .status { color: #666; font-size: 13px; }
+        .empty { color: #999; text-align: center; padding: 48px 0; }
+        .chart-container { position: relative; height: 300px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+        .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; }
+        .tab { padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; background: #f0f0f0; color: #666; }
+        .tab.active { background: #1a1a2e; color: #fff; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1><span>📊</span> tgstat-opensource</h1>
+    <div class="status" id="status">Загрузка…</div>
+</div>
+<div class="container">
+
+    <!-- Панель управления -->
+    <div class="card full mb-16">
+        <div class="flex">
+            <input type="text" id="channelInput" placeholder="@channel_name" />
+            <button class="btn btn-primary btn-sm" onclick="addChannel()">➕ Добавить канал</button>
+            <span class="status">или выбери из списка</span>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Рейтинг каналов -->
+        <div class="card full">
+            <div class="flex mb-16">
+                <h2>🏆 Рейтинг каналов</h2>
+                <select id="sortBy" onchange="loadRankings()">
+                    <option value="avg_views">По просмотрам</option>
+                    <option value="avg_er">По ER</option>
+                    <option value="posts_7d">По активности</option>
+                    <option value="participants_count">По подписчикам</option>
+                </select>
+            </div>
+            <div id="rankingsTable"><div class="empty">Загрузка…</div></div>
+        </div>
+
+        <!-- График просмотров -->
+        <div class="card full" id="chartCard" style="display:none;">
+            <div class="flex mb-16">
+                <h2 id="chartTitle">📈 Просмотры по дням</h2>
+                <button class="btn btn-secondary btn-sm" onclick="loadChannelStats()">🔄</button>
+            </div>
+            <div class="chart-container">
+                <canvas id="viewsChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Рейтинг и график ER -->
+        <div class="card" id="erCard" style="display:none;">
+            <h2>🎯 Engagement Rate</h2>
+            <div class="chart-container">
+                <canvas id="erChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Последние посты -->
+        <div class="card" id="postsCard" style="display:none;">
+            <div class="flex mb-16">
+                <h2>📝 Последние посты</h2>
+                <button class="btn btn-secondary btn-sm" onclick="loadPosts()">🔄</button>
+            </div>
+            <div id="postsTable"></div>
+        </div>
+
+        <!-- Поиск упоминаний -->
+        <div class="card full">
+            <div class="flex mb-16">
+                <h2>🔍 Поиск упоминаний</h2>
+                <input type="text" id="searchQuery" placeholder="@username" />
+                <button class="btn btn-secondary btn-sm" onclick="searchMentions()">Найти</button>
+            </div>
+            <div id="mentionsTable"><div class="empty">Введите username для поиска</div></div>
+        </div>
+    </div>
+</div>
+
+<script>
+let charts = { views: null, er: null };
+let selectedChannelId = null;
+
+// ── Загрузка рейтинга ──
+async function loadRankings() {
+    const sortBy = document.getElementById('sortBy').value;
+    const res = await fetch(`/api/rankings?sort_by=${sortBy}`);
+    const data = await res.json();
+    const el = document.getElementById('rankingsTable');
+
+    if (!data.length) {
+        el.innerHTML = '<div class="empty">📭 Каналов пока нет. Добавьте первый!</div>';
+        return;
+    }
+
+    let html = `<table>
+        <thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th><th></th></tr></thead><tbody>`;
+    data.forEach((ch, i) => {
+        const viewRate = ch.participants_count && ch.avg_views
+            ? ((ch.avg_views / ch.participants_count) * 100).toFixed(1) + '%'
+            : '—';
+        html += `<tr onclick="selectChannel(${ch.channel_id}, '${ch.username || ''}')" style="cursor:pointer;">
+            <td>${i + 1}</td>
+            <td><strong>${ch.title || ch.username || '#' + ch.channel_id}</strong></td>
+            <td>${ch.participants_count?.toLocaleString() || '—'}</td>
+            <td><span class="badge views">${ch.avg_views?.toLocaleString() || '—'}</span></td>
+            <td><span class="badge er">${ch.avg_er ? ch.avg_er.toFixed(2) + '%' : '—'}</span></td>
+            <td><span class="badge posts">${ch.posts_7d}</span></td>
+            <td>📊</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+// ── Выбор канала ──
+async function selectChannel(channelId, username) {
+    selectedChannelId = channelId;
+    document.getElementById('chartCard').style.display = 'block';
+    document.getElementById('erCard').style.display = 'block';
+    document.getElementById('postsCard').style.display = 'block';
+    document.getElementById('chartTitle').textContent = `📈 ${username ? '@' + username : '#' + channelId} — Просмотры по дням`;
+    await loadChannelStats();
+    await loadPosts();
+}
+
+// ── Загрузка статистики ──
+async function loadChannelStats() {
+    if (!selectedChannelId) return;
+    const res = await fetch(`/api/channels/${selectedChannelId}/stats?days=30`);
+    const data = await res.json();
+
+    if (!data.length) return;
+
+    const labels = data.map(d => d.date);
+    const views = data.map(d => d.total_views);
+    const er = data.map(d => d.engagement_rate);
+
+    // График просмотров
+    if (charts.views) charts.views.destroy();
+    charts.views = new Chart(document.getElementById('viewsChart'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Просмотры',
+                data: views,
+                borderColor: '#e94560',
+                backgroundColor: 'rgba(233,69,96,.1)',
+                fill: true,
+                tension: .4,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // График ER
+    if (charts.er) charts.er.destroy();
+    charts.er = new Chart(document.getElementById('erChart'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'ER %',
+                data: er,
+                borderColor: '#2e7d32',
+                backgroundColor: 'rgba(46,125,50,.1)',
+                fill: true,
+                tension: .4,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { callback: v => v + '%' } } }
+        }
+    });
+}
+
+// ── Загрузка постов ──
+async function loadPosts() {
+    if (!selectedChannelId) return;
+    const res = await fetch(`/api/channels/${selectedChannelId}/posts?limit=20`);
+    const data = await res.json();
+    const el = document.getElementById('postsTable');
+
+    if (!data.length) {
+        el.innerHTML = '<div class="empty">Постов пока нет</div>';
+        return;
+    }
+
+    let html = '<table><thead><tr><th>Дата</th><th>Просмотры</th><th>Текст</th></tr></thead><tbody>';
+    data.forEach(p => {
+        const dt = new Date(p.date).toLocaleString('ru');
+        const text = (p.text || '').substring(0, 100) + ((p.text || '').length > 100 ? '…' : '');
+        html += `<tr><td style="white-space:nowrap;">${dt}</td>
+            <td>${p.views?.toLocaleString() || '—'}</td>
+            <td>${text || '<i style="color:#999;">[медиа]</i>'}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+// ── Поиск упоминаний ──
+async function searchMentions() {
+    const query = document.getElementById('searchQuery').value.trim();
+    if (!query) return;
+    const res = await fetch(`/api/search/mentions?query=${encodeURIComponent(query)}&limit=50`);
+    const data = await res.json();
+    const el = document.getElementById('mentionsTable');
+
+    if (!data.length) {
+        el.innerHTML = '<div class="empty">🔍 Ничего не найдено</div>';
+        return;
+    }
+
+    let html = `<table><thead><tr><th>Дата</th><th>Текст</th><th>Тип</th></tr></thead><tbody>`;
+    data.forEach(m => {
+        const dt = new Date(m.date).toLocaleString('ru');
+        html += `<tr><td style="white-space:nowrap;">${dt}</td>
+            <td>${m.text || ''}</td>
+            <td>${m.mention_type}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+// ── Добавление канала ──
+async function addChannel() {
+    const username = document.getElementById('channelInput').value.trim();
+    if (!username) return;
+    const btn = document.querySelector('.btn-primary');
+    btn.disabled = true;
+    btn.textContent = '⏳ Сбор…';
+
+    try {
+        const res = await fetch(`/api/collect?channel_username=${encodeURIComponent(username)}`, { method: 'POST' });
+        const result = await res.json();
+        if (res.ok) {
+            alert(`✅ Канал @${result.channel} добавлен!`);
+            document.getElementById('channelInput').value = '';
+            await loadRankings();
+        } else {
+            alert(`❌ ${result.detail || 'Ошибка'}`);
+        }
+    } catch (e) {
+        alert('❌ Ошибка соединения');
+    }
+    btn.disabled = false;
+    btn.textContent = '➕ Добавить канал';
+}
+
+// ── Автообновление ──
+async function refreshAll() {
+    document.getElementById('status').textContent = `🔄 Обновление… ${new Date().toLocaleTimeString('ru')}`;
+    await loadRankings();
+    if (selectedChannelId) {
+        await loadChannelStats();
+        await loadPosts();
+    }
+    document.getElementById('status').textContent = `✅ Обновлено ${new Date().toLocaleTimeString('ru')}`;
+}
+
+// Старт
+loadRankings();
+setInterval(refreshAll, 60000); // каждую минуту
+</script>
+</body>
+</html>
