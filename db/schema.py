@@ -2,15 +2,16 @@
 
 Таблицы:
 - Channel        — каналы, которые мы отслеживаем
+- ChannelStats   — снимки подписчиков канала по датам (история)
 - Post           — посты из каналов
 - Mention        — упоминания каналов в других каналах
 - DailyStats     — агрегированная дневная статистика
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, DateTime, Float,
-    ForeignKey, Text, Boolean, create_engine, select, func
+    Column, Integer, BigInteger, String, DateTime, Float, Date,
+    ForeignKey, Text, Boolean, UniqueConstraint, create_engine, select, func
 )
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -34,9 +35,31 @@ class Channel(Base):
 
     posts = relationship("Post", back_populates="channel", lazy="dynamic")
     daily_stats = relationship("DailyStats", back_populates="channel", lazy="dynamic")
+    subscriber_history = relationship("ChannelStats", back_populates="channel", lazy="dynamic")
 
     def __repr__(self):
         return f"<Channel {self.username or self.id}: {self.title}>"
+
+
+class ChannelStats(Base):
+    """Снимок подписчиков канала на конкретную дату (история изменения)."""
+
+    __tablename__ = "channel_stats"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "date", name="uq_channel_stats_channel_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    channel_id = Column(BigInteger, ForeignKey("channels.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    participants_count = Column(Integer, nullable=True)
+    sources_total = Column(Integer, nullable=True)      # всего источников (подписчиков-источников)
+    _add = Column(Integer, nullable=True, default=0)    # прирост за период (дельт)
+
+    channel = relationship("Channel", back_populates="subscriber_history")
+
+    def __repr__(self):
+        return f"<ChannelStats {self.date} @{self.channel_id}: {self.participants_count}>"
 
 
 class Post(Base):
@@ -85,6 +108,7 @@ class DailyStats(Base):
     avg_forwards = Column(Float, nullable=True)
     mentions_count = Column(Integer, default=0)
     engagement_rate = Column(Float, nullable=True)  # (views+forwards)/subscribers * 100
+    participants_count = Column(Integer, nullable=True)  # подписчики, зафиксированные на эту дату
 
     channel = relationship("Channel", back_populates="daily_stats")
 

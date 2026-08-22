@@ -4,6 +4,7 @@
 - GET  /api/channels            — список каналов
 - GET  /api/channels/{id}       — детали канала
 - GET  /api/channels/{id}/stats — статистика по дням
+- GET  /api/channels/{id}/subscribers — история подписчиков по дням
 - GET  /api/channels/{id}/posts — посты канала
 - GET  /api/rankings            — рейтинг каналов
 - GET  /api/search/mentions     — поиск упоминаний
@@ -25,7 +26,7 @@ from sqlalchemy import select, func, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_database_url, init_db, get_session_factory
-from db.schema import Channel, Post, Mention, DailyStats, create_async_engine_from_url
+from db.schema import Channel, ChannelStats, Post, Mention, DailyStats, create_async_engine_from_url
 
 load_dotenv()
 logger = logging.getLogger("tgstat.api")
@@ -80,6 +81,7 @@ class DailyStatsOut(BaseModel):
     avg_forwards: Optional[float]
     mentions_count: int
     engagement_rate: Optional[float]
+    participants_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -162,6 +164,34 @@ async def get_channel_stats(channel_id: int, days: int = Query(30, ge=1, le=365)
         stats = result.scalars().all()
     await engine.dispose()
     return [DailyStatsOut.model_validate(s) for s in stats]
+
+
+@app.get("/api/channels/{channel_id}/subscribers")
+async def get_channel_subscribers(channel_id: int, days: int = Query(30, ge=1, le=365)):
+    """История подписчиков канала по датам (для графика роста)."""
+    db_url = get_database_url()
+    engine = create_async_engine_from_url(db_url)
+    cutoff = date.today() - timedelta(days=days)
+    async with get_session_factory(engine)() as session:
+        result = await session.execute(
+            select(ChannelStats)
+            .where(
+                ChannelStats.channel_id == channel_id,
+                ChannelStats.date >= cutoff,
+            )
+            .order_by(ChannelStats.date.asc())
+        )
+        rows = result.scalars().all()
+    await engine.dispose()
+    return [
+        {
+            "date": r.date.isoformat(),
+            "participants_count": r.participants_count,
+            "sources_total": r.sources_total,
+            "delta": r._add,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/api/channels/{channel_id}/posts", response_model=list[PostOut])

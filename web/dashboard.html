@@ -93,6 +93,14 @@
             </div>
         </div>
 
+        <!-- Динамика подписчиков -->
+        <div class="card" id="subsCard" style="display:none;">
+            <h2>👥 Динамика подписчиков</h2>
+            <div class="chart-container">
+                <canvas id="subsChart"></canvas>
+            </div>
+        </div>
+
         <!-- Последние посты -->
         <div class="card" id="postsCard" style="display:none;">
             <div class="flex mb-16">
@@ -115,7 +123,7 @@
 </div>
 
 <script>
-let charts = { views: null, er: null };
+let charts = { views: null, er: null, subs: null };
 let selectedChannelId = null;
 
 // ── Загрузка рейтинга ──
@@ -155,9 +163,11 @@ async function selectChannel(channelId, username) {
     selectedChannelId = channelId;
     document.getElementById('chartCard').style.display = 'block';
     document.getElementById('erCard').style.display = 'block';
+    document.getElementById('subsCard').style.display = 'block';
     document.getElementById('postsCard').style.display = 'block';
     document.getElementById('chartTitle').textContent = `📈 ${username ? '@' + username : '#' + channelId} — Просмотры по дням`;
     await loadChannelStats();
+    await loadSubscribers();
     await loadPosts();
 }
 
@@ -216,6 +226,44 @@ async function loadChannelStats() {
             maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: { y: { beginAtZero: true, ticks: { callback: v => v + '%' } } }
+        }
+    });
+}
+
+// ── Загрузка динамики подписчиков ──
+async function loadSubscribers() {
+    if (!selectedChannelId) return;
+    const res = await fetch(`/api/channels/${selectedChannelId}/subscribers?days=30`);
+    const data = await res.json();
+
+    if (!data.length) {
+        const el = document.getElementById('subsCard');
+        el.innerHTML = '<div class="empty">Нет данных о подписчиках</div>';
+        return;
+    }
+
+    const labels = data.map(d => d.date);
+    const subs = data.map(d => d.participants_count);
+
+    if (charts.subs) charts.subs.destroy();
+    charts.subs = new Chart(document.getElementById('subsChart'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Подписчики',
+                data: subs,
+                borderColor: '#1a1a2e',
+                backgroundColor: 'rgba(26,26,46,.1)',
+                fill: true,
+                tension: .4,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: false } }
         }
     });
 }
@@ -299,6 +347,7 @@ async function refreshAll() {
     await loadRankings();
     if (selectedChannelId) {
         await loadChannelStats();
+        await loadSubscribers();
         await loadPosts();
     }
     document.getElementById('status').textContent = `✅ Обновлено ${new Date().toLocaleTimeString('ru')}`;

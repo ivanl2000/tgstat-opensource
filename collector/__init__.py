@@ -3,7 +3,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 
 from telethon import TelegramClient
@@ -11,8 +11,10 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.tl.types import Channel as TLChannel, Message
 from dotenv import load_dotenv
 
+from sqlalchemy import select, func, cast, Date
+
 from db import get_database_url, init_db, get_session_factory
-from db.schema import Channel, Post, Mention, DailyStats, create_async_engine_from_url
+from db.schema import Channel, ChannelStats, Post, Mention, DailyStats, create_async_engine_from_url
 
 load_dotenv()
 logger = logging.getLogger("tgstat.collector")
@@ -66,6 +68,8 @@ class Collector:
             existing.username = channel.username
             existing.participants_count = getattr(channel, "participants_count", None)
             existing.last_scraped = datetime.utcnow()
+            # Сохранить снимок подписчиков
+            await self.save_subscriber_snapshot(session, channel.id, getattr(channel, "participants_count", None))
             return existing
 
         db_channel = Channel(
@@ -77,6 +81,8 @@ class Collector:
             first_seen=datetime.utcnow(),
         )
         session.add(db_channel)
+        # Сохранить снимок подписчиков
+        await self.save_subscriber_snapshot(session, channel.id, getattr(channel, "participants_count", None))
         return db_channel
 
     # ── Сбор сообщений ─────────────────────────────────────────────
@@ -156,6 +162,46 @@ class Collector:
         await engine.dispose()
         return mentions
 
+    # ── Снимок подписчиков ─────────────────────────────────────────
+
+    async def save_subscriber_snapshot(
+        self, session, channel_id: int, participants_count: int | None
+    ):
+        """Сохранить/обновить снимок подписчиков канала на сегодняшнюю дату."""
+        if participants_count is None:
+            return
+        today = date.today()
+        existing = await session.execute(
+            select(ChannelStats).where(
+                ChannelStats.channel_id == channel_id,
+                ChannelStats.date == today,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row:
+            # Подсчитываем прирост как разницу с предыдущим снимком
+            row.participants_count = participants_count
+            row.sources_total = participants_count  # на данный момент синоним
+        else:
+            # Попробуем найти предыдущий снимок для расчёта дельты
+            prev = await session.execute(
+                select(ChannelStats)
+                .where(ChannelStats.channel_id == channel_id)
+                .order_by(ChannelStats.date.desc())
+                .limit(1)
+            )
+            prev_row = prev.scalar_one_or_none()
+            delta = participants_count - (prev_row.participants_count or 0) if prev_row else 0
+
+            cs = ChannelStats(
+                channel_id=channel_id,
+                date=today,
+                participants_count=participants_count,
+                sources_total=participants_count,
+                _add=delta,
+            )
+            session.add(cs)
+
     # ── Расчёт дневной статистики ───────────────────────────────────
 
     async def calculate_daily_stats(self, channel_id: int):
@@ -167,10 +213,6 @@ class Collector:
             if not channel_db:
                 logger.warning("Канал #%d не найден в БД", channel_id)
                 return
-
-            subscribers = channel_db.participants_count or 0
-
-            from sqlalchemy import cast, Date
 
             # Получаем все дни, за которые есть посты
             result = await session.execute(
@@ -196,9 +238,21 @@ class Collector:
                 if existing.scalar_one_or_none():
                     continue
 
+                # Берём участников из ChannelStats на дату дня (снапшот), а не текущий participants_count
+                subs = 0
+                cs = await session.execute(
+                    select(ChannelStats).where(
+                        ChannelStats.channel_id == channel_id,
+                        ChannelStats.date == cast(row.day, Date),
+                    )
+                )
+                cs_row = cs.scalar_one_or_none()
+                if cs_row and cs_row.participants_count:
+                    subs = cs_row.participants_count
+
                 er = None
-                if subscribers > 0 and row.total_views:
-                    er = (row.total_views + (row.total_forwards or 0)) / subscribers * 100
+                if subs > 0 and row.total_views:
+                    er = (row.total_views + (row.total_forwards or 0)) / subs * 100
 
                 ds = DailyStats(
                     channel_id=channel_id,
@@ -209,6 +263,7 @@ class Collector:
                     total_forwards=row.total_forwards or 0,
                     avg_forwards=row.avg_forwards,
                     engagement_rate=round(er, 2) if er else None,
+                    participants_count=subs,
                 )
                 session.add(ds)
 
@@ -216,6 +271,13 @@ class Collector:
             logger.info("📊 Статистика за %d дней обновлена для канала #%d", result.rowcount, channel_id)
 
         await engine.dispose()
+
+        # Сохраняем снимок подписчиков на сегодня
+        engine2 = create_async_engine_from_url(get_database_url())
+        async with get_session_factory(engine2)() as session:
+            await self.save_subscriber_snapshot(session, channel_id, channel_db.participants_count)
+            await session.commit()
+        await engine2.dispose()
 
     # ── Хелперы ────────────────────────────────────────────────────
 
