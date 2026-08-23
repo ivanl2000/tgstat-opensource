@@ -1,41 +1,83 @@
-"""tgstat-opensource — FastAPI приложение
+"""tgstat-opensource — FastAPI приложение (полноценный аналог tgstat.ru)
 
-Эндпоинты:
-- GET  /api/channels            — список каналов
-- GET  /api/channels/{id}       — детали канала
-- GET  /api/channels/{id}/stats — статистика по дням
-- GET  /api/channels/{id}/subscribers — история подписчиков по дням
-- GET  /api/channels/{id}/posts — посты канала
-- GET  /api/rankings            — рейтинг каналов
-- GET  /api/search/mentions     — поиск упоминаний
-- POST /api/collect             — запустить сбор вручную
+Эндпоинты API:
+- GET /api/channels                     — список каналов
+- GET /api/channels/{id}                — детали канала
+- GET /api/channels/{id}/stats          — статистика по дням
+- GET /api/channels/{id}/subscribers    — история подписчиков
+- GET /api/channels/{id}/posts          — посты канала
+- GET /api/rankings                     — рейтинг каналов
+- GET /api/search/mentions              — поиск упоминаний
+- GET /api/search                       — поиск каналов
+- GET /api/search/posts                 — поиск постов
+- GET /api/top/posts                    — топ публикаций
+- GET /api/categories                   — категории с количеством
+- POST /api/collect                     — запустить сбор
+
+Страницы (HTML):
+- GET /                                 — главная
+- GET /catalog                          — каталог каналов
+- GET /channel/{id}                     — страница канала
+- GET /top                              — рейтинги
+- GET /search                           — поиск
 """
 
 import os
-import asyncio
+import sys
+import random
 import logging
 from datetime import datetime, date, timedelta
 from typing import Optional
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from sqlalchemy import select, func, cast, Date
+from sqlalchemy import select, func, cast, Date, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_database_url, init_db, get_session_factory
 from db.schema import Channel, ChannelStats, Post, Mention, DailyStats, create_async_engine_from_url
 
+# ── Эмуляция (демо-данные, пока БД пуста) ─────────────────────────
+from api.emulation import (
+    should_use_emulation,
+    generate_all_channels,
+    generate_channel_detail,
+    generate_daily_stats,
+    generate_subscribers,
+    generate_posts,
+    generate_rankings,
+    search_channels_emulated,
+    search_posts_emulated,
+    search_mentions_emulated,
+    generate_top_posts,
+    CATEGORIES,
+    CATEGORY_LIST,
+)
+
 load_dotenv()
+
+# ── Пути ────────────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent.parent
+WEB_DIR = BASE_DIR / "web"
+TEMPLATES_DIR = WEB_DIR / "templates"
+STATIC_DIR = WEB_DIR / "static"
+
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
 logger = logging.getLogger("tgstat.api")
 
-app = FastAPI(title="tgstat-opensource", version="0.1.0")
+app = FastAPI(title="tgstat-opensource", version="0.2.0")
+
+# ── Static files ────────────────────────────────────────────────────
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ── Lifespan ────────────────────────────────────────────────────────
-
 @app.on_event("startup")
 async def startup():
     await init_db()
@@ -43,7 +85,6 @@ async def startup():
 
 
 # ── Pydantic схемы ─────────────────────────────────────────────────
-
 class ChannelOut(BaseModel):
     id: int
     username: Optional[str]
@@ -53,6 +94,9 @@ class ChannelOut(BaseModel):
     first_seen: Optional[datetime]
     last_scraped: Optional[datetime]
     posts_count: int = 0
+    category: Optional[str] = None
+    language: Optional[str] = None
+    country: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -95,21 +139,79 @@ class RankingItem(BaseModel):
     avg_views: float
     avg_er: Optional[float]
     posts_7d: int
+    category: Optional[str] = None
 
 
-# ── Эндпоинты ──────────────────────────────────────────────────────
+# ── Database helpers ────────────────────────────────────────────────
+
+def _db_url():
+    return get_database_url()
+
+
+async def _count_rows(session, model):
+    result = await session.execute(select(func.count(model.id)))
+    return result.scalar() or 0
+
+
+async def _get_session():
+    """Context-manager для сессии БД."""
+    db_url = _db_url()
+    engine = create_async_engine_from_url(db_url)
+    return get_session_factory(engine)(), engine
+
+
+# ── Эмуляция (проверка пустоты БД) ─────────────────────────────────
+# Если в таблице channels 0 строк — возвращаем демо-данные.
+# Как только появятся реальные данные — эмуляция отключается автоматически.
+# Для принудительного отключения: EmulationCheck.force_real = True
+
+
+class EmulationCheck:
+    _cache: Optional[bool] = None
+    _cache_time: Optional[datetime] = None
+    force_real = False  # установите True, чтобы отключить эмуляцию
+
+    @classmethod
+    async def should_emulate(cls) -> bool:
+        if cls.force_real:
+            return False
+        if cls._cache is not None and cls._cache_time and datetime.utcnow() - cls._cache_time < timedelta(seconds=30):
+            return cls._cache
+        try:
+            db_url = _db_url()
+            engine = create_async_engine_from_url(db_url)
+            async with get_session_factory(engine)() as session:
+                count = await _count_rows(session, Channel)
+            await engine.dispose()
+            empty = count == 0
+            cls._cache = empty
+            cls._cache_time = datetime.utcnow()
+            return empty
+        except Exception:
+            return True
+
+    @classmethod
+    def invalidate_cache(cls):
+        cls._cache = None
+        cls._cache_time = None
+
+
+# ── Эндпоинты API ──────────────────────────────────────────────────
 
 @app.get("/api/channels", response_model=list[ChannelOut])
 async def list_channels():
     """Список отслеживаемых каналов."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        channels = generate_all_channels()
+        return [ChannelOut(**ch) for ch in channels]
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     async with get_session_factory(engine)() as session:
         result = await session.execute(
             select(Channel).order_by(Channel.last_scraped.desc().nullslast())
         )
         channels = result.scalars().all()
-
         out = []
         for ch in channels:
             cnt = await session.execute(
@@ -122,7 +224,6 @@ async def list_channels():
                     "first_seen", "last_scraped"]},
                 posts_count=posts_count
             ))
-
     await engine.dispose()
     return out
 
@@ -130,7 +231,13 @@ async def list_channels():
 @app.get("/api/channels/{channel_id}", response_model=ChannelOut)
 async def get_channel(channel_id: int):
     """Детали канала."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        ch = generate_channel_detail(channel_id)
+        if not ch:
+            raise HTTPException(404, "Канал не найден")
+        return ChannelOut(**ch)
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     async with get_session_factory(engine)() as session:
         ch = await session.get(Channel, channel_id)
@@ -152,7 +259,11 @@ async def get_channel(channel_id: int):
 @app.get("/api/channels/{channel_id}/stats", response_model=list[DailyStatsOut])
 async def get_channel_stats(channel_id: int, days: int = Query(30, ge=1, le=365)):
     """Статистика канала по дням."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        stats = generate_daily_stats(channel_id, days)
+        return [DailyStatsOut(**s) for s in stats]
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     cutoff = datetime.utcnow() - timedelta(days=days)
     async with get_session_factory(engine)() as session:
@@ -168,8 +279,11 @@ async def get_channel_stats(channel_id: int, days: int = Query(30, ge=1, le=365)
 
 @app.get("/api/channels/{channel_id}/subscribers")
 async def get_channel_subscribers(channel_id: int, days: int = Query(30, ge=1, le=365)):
-    """История подписчиков канала по датам (для графика роста)."""
-    db_url = get_database_url()
+    """История подписчиков канала (для графика роста)."""
+    if await EmulationCheck.should_emulate():
+        return generate_subscribers(channel_id, days)
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     cutoff = date.today() - timedelta(days=days)
     async with get_session_factory(engine)() as session:
@@ -197,7 +311,11 @@ async def get_channel_subscribers(channel_id: int, days: int = Query(30, ge=1, l
 @app.get("/api/channels/{channel_id}/posts", response_model=list[PostOut])
 async def get_channel_posts(channel_id: int, limit: int = Query(50, ge=1, le=500)):
     """Последние посты канала."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        posts = generate_posts(channel_id, limit)
+        return [PostOut(**p) for p in posts]
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     async with get_session_factory(engine)() as session:
         result = await session.execute(
@@ -212,13 +330,16 @@ async def get_channel_posts(channel_id: int, limit: int = Query(50, ge=1, le=500
 
 
 @app.get("/api/rankings", response_model=list[RankingItem])
-async def get_rankings(sort_by: str = Query("avg_views", regex="^(avg_views|avg_er|posts_7d|participants_count)$")):
+async def get_rankings(sort_by: str = Query("avg_views", pattern="^(avg_views|avg_er|posts_7d|participants_count)$")):
     """Рейтинг каналов."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        rankings = generate_rankings(sort_by)
+        return [RankingItem(**r) for r in rankings]
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     cutoff = datetime.utcnow() - timedelta(days=7)
     async with get_session_factory(engine)() as session:
-        # Средние просмотры за 7 дней
         stats = await session.execute(
             select(
                 DailyStats.channel_id,
@@ -247,7 +368,6 @@ async def get_rankings(sort_by: str = Query("avg_views", regex="^(avg_views|avg_
 
     await engine.dispose()
 
-    # Сортируем
     reverse = True
     rows.sort(key=lambda r: getattr(r, sort_by) or 0, reverse=reverse)
     return rows
@@ -256,7 +376,10 @@ async def get_rankings(sort_by: str = Query("avg_views", regex="^(avg_views|avg_
 @app.get("/api/search/mentions")
 async def search_mentions(query: str = Query(..., min_length=2), limit: int = Query(50, le=200)):
     """Поиск упоминаний канала по тексту."""
-    db_url = get_database_url()
+    if await EmulationCheck.should_emulate():
+        return search_mentions_emulated(query, limit)
+
+    db_url = _db_url()
     engine = create_async_engine_from_url(db_url)
     async with get_session_factory(engine)() as session:
         result = await session.execute(
@@ -280,6 +403,140 @@ async def search_mentions(query: str = Query(..., min_length=2), limit: int = Qu
     ]
 
 
+# ── НОВЫЕ ЭНДПТОИНТЫ ──────────────────────────────────────────────
+
+@app.get("/api/search")
+async def search_channels(q: str = Query(..., min_length=1)):
+    """Поиск каналов по названию/username/описанию."""
+    if await EmulationCheck.should_emulate():
+        return search_channels_emulated(q)
+
+    db_url = _db_url()
+    engine = create_async_engine_from_url(db_url)
+    async with get_session_factory(engine)() as session:
+        result = await session.execute(
+            select(Channel).where(
+                (Channel.title.ilike(f"%{q}%")) |
+                (Channel.username.ilike(f"%{q}%")) |
+                (Channel.description.ilike(f"%{q}%"))
+            ).limit(50)
+        )
+        channels = result.scalars().all()
+    await engine.dispose()
+
+    return [
+        {
+            "id": ch.id,
+            "username": ch.username,
+            "title": ch.title,
+            "description": ch.description,
+            "participants_count": ch.participants_count,
+        }
+        for ch in channels
+    ]
+
+
+@app.get("/api/search/posts")
+async def search_posts(q: str = Query(..., min_length=1), limit: int = Query(20, le=100)):
+    """Поиск постов по тексту."""
+    if await EmulationCheck.should_emulate():
+        return search_posts_emulated(q, limit)
+
+    db_url = _db_url()
+    engine = create_async_engine_from_url(db_url)
+    async with get_session_factory(engine)() as session:
+        result = await session.execute(
+            select(Post)
+            .where(Post.text.ilike(f"%{q}%"))
+            .order_by(Post.date.desc())
+            .limit(limit)
+        )
+        posts = result.scalars().all()
+
+        out = []
+        for p in posts:
+            ch = await session.get(Channel, p.channel_id)
+            out.append({
+                "id": p.id,
+                "channel_id": p.channel_id,
+                "channel_username": ch.username if ch else None,
+                "channel_title": ch.title if ch else None,
+                "date": p.date,
+                "text": p.text[:300] if p.text else None,
+                "views": p.views,
+                "forwards": p.forwards,
+            })
+    await engine.dispose()
+    return out
+
+
+@app.get("/api/top/posts")
+async def top_posts(limit: int = Query(10, ge=1, le=100)):
+    """Топ публикаций по просмотрам."""
+    if await EmulationCheck.should_emulate():
+        posts = generate_top_posts(limit)
+        return posts
+
+    db_url = _db_url()
+    engine = create_async_engine_from_url(db_url)
+    async with get_session_factory(engine)() as session:
+        result = await session.execute(
+            select(Post)
+            .order_by(Post.views.desc().nullslast())
+            .limit(limit)
+        )
+        posts = result.scalars().all()
+
+        out = []
+        for p in posts:
+            ch = await session.get(Channel, p.channel_id)
+            out.append({
+                "id": p.id,
+                "channel_id": p.channel_id,
+                "channel_username": ch.username if ch else None,
+                "channel_title": ch.title if ch else None,
+                "date": p.date,
+                "text": p.text[:300] if p.text else None,
+                "views": p.views,
+                "forwards": p.forwards,
+                "has_media": p.has_media,
+            })
+    await engine.dispose()
+    return out
+
+
+@app.get("/api/categories")
+async def list_categories():
+    """Список категорий с количеством каналов в каждой."""
+    if await EmulationCheck.should_emulate():
+        channels = generate_all_channels()
+        cat_counts = {}
+        for ch in channels:
+            cat = ch.get("category", "Разное")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+        icons = {
+            "Новости и СМИ": "📰", "Развлечения": "🎭", "Технологии": "💻",
+            "Бизнес": "💼", "Спорт": "⚽", "Образование": "📚",
+            "Здоровье": "💊", "Путешествия": "✈️", "Стиль и мода": "👗",
+            "Авто": "🚗",
+        }
+        return [
+            {"name": cat, "count": cat_counts.get(cat, 0), "icon": icons.get(cat, "📂")}
+            for cat in CATEGORY_LIST if cat in cat_counts
+        ]
+
+    db_url = _db_url()
+    engine = create_async_engine_from_url(db_url)
+    async with get_session_factory(engine)() as session:
+        result = await session.execute(
+            select(Channel.id)  # пока категории нет в схеме — все в "Другое"
+        )
+        count = len(result.scalars().all())
+    await engine.dispose()
+    return [{"name": "Другое", "count": count, "icon": "📂"}]
+
+
 @app.post("/api/collect")
 async def trigger_collect(channel_username: str):
     """Запустить сбор данных для канала (асинхронно)."""
@@ -300,7 +557,7 @@ async def trigger_collect(channel_username: str):
         if not entity:
             raise HTTPException(404, f"Канал @{channel_username} не найден")
 
-        db_url = get_database_url()
+        db_url = _db_url()
         engine = create_async_engine_from_url(db_url)
         async with get_session_factory(engine)() as session:
             await collector.add_channel(entity, session)
@@ -309,22 +566,68 @@ async def trigger_collect(channel_username: str):
 
         await collector.collect_posts(entity.id, limit=200, offset_days=7)
         await collector.calculate_daily_stats(entity.id)
+        EmulationCheck.invalidate_cache()
         return {"status": "ok", "channel": entity.username, "title": entity.title}
     finally:
         await collector.stop()
 
 
-# ── Веб-интерфейс ──────────────────────────────────────────────────
+# ── СТРАНИЦЫ (HTML) ───────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    """Главная страница — дашборд."""
+async def index(request: Request):
+    """Главная страница."""
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "active_page": "index"}
+    )
+
+
+@app.get("/catalog", response_class=HTMLResponse)
+async def catalog(request: Request):
+    """Каталог каналов."""
+    return templates.TemplateResponse(
+        "catalog.html",
+        {"request": request, "active_page": "catalog"}
+    )
+
+
+@app.get("/channel/{channel_id}", response_class=HTMLResponse)
+async def channel_page(request: Request, channel_id: int):
+    """Страница канала."""
+    return templates.TemplateResponse(
+        "channel.html",
+        {"request": request, "channel_id": channel_id, "active_page": ""}
+    )
+
+
+@app.get("/top", response_class=HTMLResponse)
+async def top_page(request: Request):
+    """Топы / Рейтинги."""
+    return templates.TemplateResponse(
+        "top.html",
+        {"request": request, "active_page": "top"}
+    )
+
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request, q: str = ""):
+    """Поиск по каналам и постам."""
+    return templates.TemplateResponse(
+        "search.html",
+        {"request": request, "query": q, "active_page": ""}
+    )
+
+
+# ── Fallback для старых ссылок на dashboard.html ──────────────────
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_redirect():
     from pathlib import Path
     web_dir = Path(__file__).parent.parent / "web"
     index_path = web_dir / "dashboard.html"
     if index_path.exists():
         return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>tgstat-opensource</h1><p>Дашборд скоро будет</p>")
+    return HTMLResponse("<h1>tgstat-opensource</h1><p>Используйте / для нового интерфейса</p>")
 
 
 if __name__ == "__main__":

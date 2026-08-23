@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}tgstat-opensource{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/tgstat.css">
+    <script src="/static/chart/chart.umd.min.js"></script>
+    <script src="/static/js/main.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+
+<div class="header">
+    <a href="/" class="header-logo">
+        📊 <span>tgstat</span>
+    </a>
+    <nav class="nav">
+        <a href="/" class="{% if active_page == 'index' %}active{% endif %}">Главная</a>
+        <a href="/catalog" class="{% if active_page == 'catalog' %}active{% endif %}">Каталог</a>
+        <a href="/top" class="{% if active_page == 'top' %}active{% endif %}">Топы</a>
+    </nav>
+    <div class="header-search">
+        <input type="text" id="globalSearch" placeholder="Поиск каналов…"
+               onkeydown="if(event.key==='Enter'){goSearch(this.value)}" />
+        <button class="btn btn-sm btn-ghost" onclick="goSearch(document.getElementById('globalSearch').value)">🔍</button>
+    </div>
+</div>
+
+<div class="container">
+    {% block content %}{% endblock %}
+</div>
+
+<script>
+function goSearch(q) {
+  if (!q || !q.trim()) return;
+  window.location.href = '/search?q=' + encodeURIComponent(q.trim());
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}tgstat-opensource — Канал #{{ channel_id }}{% endblock %}
+{% block head %}{% endblock %}
+
+{% block content %}
+<div id="channelPage">
+    <div class="loading">Загрузка канала…</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadChannel() {
+  const channelId = {{ channel_id }};
+
+  const [ch, stats, subs, posts] = await Promise.all([
+    api('/api/channels/' + channelId),
+    api('/api/channels/' + channelId + '/stats?days=30'),
+    api('/api/channels/' + channelId + '/subscribers?days=30'),
+    api('/api/channels/' + channelId + '/posts?limit=20'),
+  ]);
+
+  if (!ch) {
+    document.getElementById('channelPage').innerHTML =
+      '<div class="empty-state"><div class="empty-state-icon">❌</div><div class="empty-state-text">Канал не найден</div></div>';
+    return;
+  }
+
+  const latest = stats && stats.length ? stats[stats.length - 1] : null;
+  const er = latest ? latest.engagement_rate : (ch.avg_er || 0);
+  const cpm = ch.participants_count ? (ch.participants_count * 0.005 * (latest ? latest.avg_views / 1000 : 0)).toFixed(2) : 0;
+
+  let html = `
+    <div class="channel-header">
+      <div class="channel-avatar">📢</div>
+      <div class="channel-info">
+        <h1>${ch.title || 'Без названия'}</h1>
+        <div class="username">@${ch.username || '—'}</div>
+        <div class="description">${ch.description || 'Нет описания'}</div>
+        <div class="channel-metrics">
+          <div class="metric">
+            <div class="metric-value">${fmtNum(ch.participants_count)}</div>
+            <div class="metric-label">👥 Подписчики</div>
+          </div>
+          <div class="metric">
+            <div class="metric-value">${fmtPercent(er)}</div>
+            <div class="metric-label">🎯 ER</div>
+          </div>
+          <div class="metric">
+            <div class="metric-value">$${cpm}</div>
+            <div class="metric-label">💰 CPM (оценка)</div>
+          </div>
+          <div class="metric">
+            <div class="metric-value">${fmtNum(ch.posts_count)}</div>
+            <div class="metric-label">📝 Всего постов</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Вкладки -->
+    <div class="tab-bar mb-16">
+      <button class="tab active" onclick="switchTab('graph')">Графики</button>
+      <button class="tab" onclick="switchTab('posts')">Посты</button>
+      <button class="tab" onclick="switchTab('info')">О канале</button>
+    </div>
+
+    <!-- Tab: Графики -->
+    <div id="tabGraph">
+      <div class="grid">
+        <div class="card card-full">
+          <div class="card-title-row">
+            <h2>📈 Просмотры по дням</h2>
+          </div>
+          <div class="chart-container"><canvas id="chViewsChart"></canvas></div>
+        </div>
+        <div class="card">
+          <h2>🎯 Engagement Rate</h2>
+          <div class="chart-container"><canvas id="chERChart"></canvas></div>
+        </div>
+        <div class="card">
+          <h2>👥 Рост подписчиков</h2>
+          <div class="chart-container"><canvas id="chSubsChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Посты -->
+    <div id="tabPosts" class="hidden">
+      <div class="card card-full">
+        <h2>📝 Последние посты</h2>
+        <div id="postsList"></div>
+      </div>
+    </div>
+
+    <!-- Tab: О канале -->
+    <div id="tabInfo" class="hidden">
+      <div class="grid-3">
+        <div class="card">
+          <h3>Основное</h3>
+          <table>
+            <tr><td style="color:var(--text-muted)">ID канала</td><td>${ch.id}</td></tr>
+            <tr><td style="color:var(--text-muted)">Username</td><td>@${ch.username || '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Язык</td><td>${ch.language || '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Категория</td><td>${ch.category || '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Страна</td><td>${ch.country || '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Отслеживается с</td><td>${fmtDate(ch.first_seen)}</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Активность (30 дней)</h3>
+          <table>
+            <tr><td style="color:var(--text-muted)">Всего постов</td><td>${stats ? stats.reduce((s, d) => s + d.posts_count, 0) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Средн. просмотров</td><td>${stats ? fmtNum(stats.reduce((s, d) => s + d.total_views, 0) / stats.length) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Всего упоминаний</td><td>${stats ? stats.reduce((s, d) => s + d.mentions_count, 0) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Средний ER</td><td>${fmtPercent(er)}</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Последнее обновление</h3>
+          <table>
+            <tr><td style="color:var(--text-muted)">Последний сбор</td><td>${fmtDateTime(ch.last_scraped)}</td></tr>
+            <tr><td style="color:var(--text-muted)">Источник данных</td><td><span class="badge badge-views">Демо</span></td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('channelPage').innerHTML = html;
+
+  // Charts
+  if (stats && stats.length) {
+    const labels = stats.map(d => fmtDate(d.date));
+    lineChart('chViewsChart', labels, stats.map(d => d.total_views), 'Просмотры', '#3498db');
+    lineChart('chERChart', labels, stats.map(d => d.engagement_rate || 0), 'ER %', '#2ed573');
+  }
+  if (subs && subs.length) {
+    lineChart('chSubsChart', subs.map(d => fmtDate(d.date)), subs.map(d => d.participants_count), 'Подписчики', '#e94560');
+  }
+
+  // Posts list
+  if (posts && posts.length) {
+    let phtml = '<table><thead><tr><th>Дата</th><th>👁️</th><th>🔄</th><th>Текст</th><th>📎</th></tr></thead><tbody>';
+    posts.forEach(p => {
+      phtml += `<tr>
+        <td style="white-space:nowrap;">${fmtDateTime(p.date)}</td>
+        <td>${fmtNum(p.views)}</td>
+        <td>${fmtNum(p.forwards)}</td>
+        <td>${truncate(p.text, 100) || '<span class="text-muted">[медиа]</span>'}</td>
+        <td>${p.has_media ? (p.media_type || '📎') : '—'}</td>
+      </tr>`;
+    });
+    phtml += '</tbody></table>';
+    document.getElementById('postsList').innerHTML = phtml;
+  } else {
+    document.getElementById('postsList').innerHTML = '<div class="empty-state"><div class="empty-state-text">Нет постов</div></div>';
+  }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('[id^="tab"]').forEach(t => t.classList.add('hidden'));
+  document.querySelector(`.tab[onclick*="${tab}"]`).classList.add('active');
+  document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
+}
+
+loadChannel();
+</script>
+{% endblock %}

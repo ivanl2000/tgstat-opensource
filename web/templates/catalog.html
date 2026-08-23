@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}tgstat-opensource — Каталог каналов{% endblock %}
+{% block head %}<script src="/static/js/catalog.js"></script>{% endblock %}
+
+{% block content %}
+<h1 style="font-size: 24px; margin-bottom: 20px;">📂 Каталог каналов</h1>
+
+<div class="filters-bar">
+    <label>Категория:</label>
+    <select id="filterCategory" onchange="applyFilters()">
+        <option value="">Все категории</option>
+    </select>
+    <label>Язык:</label>
+    <select id="filterLang" onchange="applyFilters()">
+        <option value="">Все языки</option>
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+    </select>
+    <label>Сортировка:</label>
+    <select id="filterSort" onchange="applyFilters()">
+        <option value="avg_views">По просмотрам</option>
+        <option value="participants_count">По подписчикам</option>
+        <option value="avg_er">По ER</option>
+    </select>
+    <span class="text-muted" id="resultsCount" style="margin-left: auto;"></span>
+</div>
+
+<div id="catalogGrid" class="grid-4">
+    <div class="loading">Загрузка…</div>
+</div>
+
+<div class="pagination" id="pagination"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// catalog.js inline to avoid extra request
+const ITEMS_PER_PAGE = 24;
+let allChannels = [];
+let filteredChannels = [];
+let currentPage = 1;
+
+async function loadCatalog() {
+  const channels = await api('/api/channels');
+  if (!channels || !channels.length) {
+    document.getElementById('catalogGrid').innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">Нет каналов</div></div>';
+    return;
+  }
+
+  // Enrich with category from rankings
+  const rankings = await api('/api/rankings?sort_by=participants_count');
+  const rankMap = {};
+  if (rankings) {
+    rankings.forEach(r => { rankMap[r.channel_id] = r; });
+  }
+
+  allChannels = channels.map(ch => ({
+    ...ch,
+    category: (rankMap[ch.id] && rankMap[ch.id].category) || 'Разное',
+    avg_views: (rankMap[ch.id] && rankMap[ch.id].avg_views) || 0,
+    avg_er: (rankMap[ch.id] && rankMap[ch.id].avg_er) || 0,
+    language: ch.language || 'ru',
+  }));
+
+  // Populate categories filter
+  const cats = [...new Set(allChannels.map(c => c.category).filter(Boolean))];
+  const catSelect = document.getElementById('filterCategory');
+  cats.sort().forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    catSelect.appendChild(opt);
+  });
+
+  applyFilters();
+}
+
+function applyFilters() {
+  const cat = document.getElementById('filterCategory').value;
+  const lang = document.getElementById('filterLang').value;
+  const sort = document.getElementById('filterSort').value;
+
+  filteredChannels = allChannels.filter(ch => {
+    if (cat && ch.category !== cat) return false;
+    if (lang && ch.language !== lang) return false;
+    return true;
+  });
+
+  // Sort
+  if (sort === 'avg_views') {
+    filteredChannels.sort((a, b) => (b.avg_views || 0) - (a.avg_views || 0));
+  } else if (sort === 'participants_count') {
+    filteredChannels.sort((a, b) => (b.participants_count || 0) - (a.participants_count || 0));
+  } else if (sort === 'avg_er') {
+    filteredChannels.sort((a, b) => (b.avg_er || 0) - (a.avg_er || 0));
+  }
+
+  document.getElementById('resultsCount').textContent = `${filteredChannels.length} каналов`;
+  currentPage = 1;
+  renderPage();
+}
+
+function renderPage() {
+  const start = (currentPage - 1) * ITEMS_PER_PAGE;
+  const pageItems = filteredChannels.slice(start, start + ITEMS_PER_PAGE);
+  const grid = document.getElementById('catalogGrid');
+
+  if (!pageItems.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-text">Ничего не найдено</div></div>';
+    renderPagination(0);
+    return;
+  }
+
+  grid.innerHTML = pageItems.map(ch => `
+    <div class="channel-card" onclick="window.location='/channel/${ch.id}'">
+      <span class="channel-card-category">${ch.category || 'Разное'}</span>
+      <div class="channel-card-title">${ch.title || ch.username}</div>
+      <div class="channel-card-username">@${ch.username}</div>
+      <div class="channel-card-stats">
+        <span class="channel-card-stat">👥 ${fmtNum(ch.participants_count)}</span>
+        <span class="channel-card-stat">👁️ ${fmtNum(ch.avg_views)}</span>
+        <span class="channel-card-stat">📈 ${fmtPercent(ch.avg_er)}</span>
+      </div>
+    </div>
+  `).join('');
+
+  renderPagination(filteredChannels.length);
+}
+
+function renderPagination(total) {
+  const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+  const el = document.getElementById('pagination');
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+  let html = '';
+  for (let i = 1; i <= totalPages; i++) {
+    if (i > 1 && i < totalPages && Math.abs(i - currentPage) > 2) {
+      if (html.slice(-7) !== '…</button>') html += '<button class="page-btn disabled">…</button>';
+      continue;
+    }
+    html += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="goPage(${i})">${i}</button>`;
+  }
+  el.innerHTML = html;
+}
+
+function goPage(p) {
+  currentPage = p;
+  renderPage();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+loadCatalog();
+</script>
+{% endblock %}

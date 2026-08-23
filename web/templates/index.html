@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}tgstat-opensource — Аналитика Telegram-каналов{% endblock %}
+{% block head %}
+<script src="/static/js/index.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- Строка поиска (large) -->
+<div class="card card-full mb-24" style="padding: 24px 32px; text-align: center;">
+    <h2 style="font-size: 22px; justify-content: center; margin-bottom: 12px;">
+        📊 Аналитика Telegram-каналов
+    </h2>
+    <p class="text-muted" style="margin-bottom: 16px; font-size: 14px;">
+        Просматривайте статистику, рейтинги и аналитику любых Telegram-каналов
+    </p>
+    <div style="max-width: 500px; margin: 0 auto;">
+        <div style="display: flex; gap: 8px;">
+            <input type="text" id="bigSearch" placeholder="Введите название или @username канала…"
+                   style="flex: 1;" onkeydown="if(event.key==='Enter'){bigSearch()}"/>
+            <button class="btn btn-primary" onclick="bigSearch()">🔍 Поиск</button>
+        </div>
+    </div>
+</div>
+
+<div class="grid mb-24">
+    <!-- Статистика (4 метрики) -->
+    <div class="card stat-card">
+        <div class="stat-card-icon">📡</div>
+        <div class="stat-card-value" id="statChannels">—</div>
+        <div class="stat-card-label">Отслеживаемых каналов</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-card-icon">👁️</div>
+        <div class="stat-card-value" id="statViews">—</div>
+        <div class="stat-card-label">Просмотров за 7 дней</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-card-icon">📝</div>
+        <div class="stat-card-value" id="statPosts">—</div>
+        <div class="stat-card-label">Новых постов за 7 дней</div>
+    </div>
+    <div class="card stat-card">
+        <div class="stat-card-icon">📈</div>
+        <div class="stat-card-value" id="statAvgER">—</div>
+        <div class="stat-card-label">Средний ER по платформе</div>
+    </div>
+</div>
+
+<div class="grid mb-24">
+    <!-- Топ каналов по просмотрам -->
+    <div class="card card-full">
+        <div class="card-title-row">
+            <h2>🏆 Топ каналов по просмотрам</h2>
+            <a href="/top" class="btn btn-sm btn-secondary">Все рейтинги →</a>
+        </div>
+        <div id="topChannels"><div class="loading">Загрузка…</div></div>
+    </div>
+
+    <!-- Топ публикаций дня -->
+    <div class="card card-full">
+        <h2>🔥 Топ публикаций дня</h2>
+        <div id="topPosts"><div class="loading">Загрузка…</div></div>
+    </div>
+</div>
+
+<!-- Категории/подборки -->
+<div class="card card-full">
+    <h2>📂 Категории</h2>
+    <div id="categoriesGrid" style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <div class="loading">Загрузка…</div>
+    </div>
+</div>
+
+<div style="margin-top: 16px; text-align: center;">
+    <span class="badge badge-views">⚡ Демо-данные</span>
+    <span class="text-muted" style="font-size: 12px; margin-left: 8px;">
+        Реальные данные появятся после подключения Telegram API
+    </span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function bigSearch() {
+  const q = document.getElementById('bigSearch').value.trim();
+  if (!q) return;
+  window.location.href = '/search?q=' + encodeURIComponent(q);
+}
+
+async function loadIndex() {
+  // Top channels
+  const rankings = await api('/api/rankings?sort_by=avg_views');
+  const topEl = document.getElementById('topChannels');
+  if (rankings && rankings.length) {
+    let html = '<table><thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th></tr></thead><tbody>';
+    rankings.slice(0, 15).forEach((ch, i) => {
+      html += `<tr onclick="window.location='/channel/${ch.channel_id}'" style="cursor:pointer">
+        <td>${i+1}</td>
+        <td><strong>${ch.title || ch.username}</strong><br><span class="text-muted" style="font-size:11px;">@${ch.username}</span></td>
+        <td>${fmtNum(ch.participants_count)}</td>
+        <td><span class="badge badge-views">${fmtNum(ch.avg_views)}</span></td>
+        <td><span class="badge badge-er">${fmtPercent(ch.avg_er)}</span></td>
+        <td>${ch.posts_7d}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    topEl.innerHTML = html;
+
+    // Stats
+    const totalChannels = rankings.length;
+    document.getElementById('statChannels').textContent = totalChannels;
+    const totalViews = rankings.reduce((s, r) => s + r.avg_views * r.posts_7d, 0);
+    document.getElementById('statViews').textContent = fmtNum(totalViews);
+    const totalPosts = rankings.reduce((s, r) => s + r.posts_7d, 0);
+    document.getElementById('statPosts').textContent = fmtNum(totalPosts);
+    const avgER = rankings.reduce((s, r) => s + (r.avg_er || 0), 0) / totalChannels;
+    document.getElementById('statAvgER').textContent = fmtPercent(avgER);
+  } else {
+    topEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">Нет данных</div></div>';
+  }
+
+  // Top posts
+  const topPosts = await api('/api/top/posts?limit=8');
+  const postsEl = document.getElementById('topPosts');
+  if (topPosts && topPosts.length) {
+    let html = '<table><thead><tr><th>Канал</th><th>Пост</th><th>👁️</th><th>🔄</th><th>📅</th></tr></thead><tbody>';
+    topPosts.forEach(p => {
+      html += `<tr onclick="window.location='/channel/${p.channel_id}'" style="cursor:pointer">
+        <td>@${p.channel_username}</td>
+        <td>${truncate(p.text, 80) || '<i class="text-muted">[медиа]</i>'}</td>
+        <td>${fmtNum(p.views)}</td>
+        <td>${fmtNum(p.forwards)}</td>
+        <td style="white-space:nowrap;">${fmtDate(p.date)}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    postsEl.innerHTML = html;
+  } else {
+    postsEl.innerHTML = '<div class="empty-state"><div class="empty-state-text">Нет данных</div></div>';
+  }
+
+  // Categories
+  const cats = await api('/api/categories');
+  const catEl = document.getElementById('categoriesGrid');
+  if (cats && cats.length) {
+    catEl.innerHTML = cats.map(c =>
+      `<a href="/catalog?category=${encodeURIComponent(c.name)}" class="channel-card" style="flex:1; min-width:140px; text-align:center;">
+         <div style="font-size:28px; margin-bottom:6px;">${c.icon}</div>
+         <div style="font-weight:600; font-size:14px;">${c.name}</div>
+         <div class="text-muted" style="font-size:12px;">${c.count} каналов</div>
+       </a>`
+    ).join('');
+  }
+}
+
+loadIndex();
+</script>
+{% endblock %}

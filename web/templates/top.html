@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}tgstat-opensource — Топы{% endblock %}
+{% block head %}<script src="/static/js/top.js"></script>{% endblock %}
+
+{% block content %}
+<h1 style="font-size: 24px; margin-bottom: 20px;">🏆 Рейтинги</h1>
+
+<div class="tab-bar mb-24">
+    <button class="tab active" onclick="switchTop('topChannels')">Топ каналов</button>
+    <button class="tab" onclick="switchTop('topPosts')">Топ публикаций</button>
+</div>
+
+<!-- Топ каналов -->
+<div id="topChannels">
+    <div class="card card-full">
+        <div class="card-title-row">
+            <h2>📺 Рейтинг каналов</h2>
+            <div class="flex gap-sm">
+                <span class="text-muted" style="font-size:12px;">Сортировка:</span>
+                <select id="topSort" onchange="loadTopChannels()" style="font-size:12px; padding:4px 10px;">
+                    <option value="avg_views">По просмотрам</option>
+                    <option value="participants_count">По подписчикам</option>
+                    <option value="avg_er">По ER</option>
+                    <option value="posts_7d">По активности</option>
+                </select>
+            </div>
+        </div>
+        <div id="topChannelsTable"><div class="loading">Загрузка…</div></div>
+    </div>
+</div>
+
+<!-- Топ публикаций -->
+<div id="topPosts" class="hidden">
+    <div class="card card-full">
+        <h2>🔥 Самые просматриваемые публикации</h2>
+        <div id="topPostsTable"><div class="loading">Загрузка…</div></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadTopChannels() {
+  const sort = document.getElementById('topSort').value;
+  const data = await api('/api/rankings?sort_by=' + sort);
+  const el = document.getElementById('topChannelsTable');
+
+  if (!data || !data.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">Нет данных</div></div>';
+    return;
+  }
+
+  let html = '<table class="top-table"><thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th><th>Охват %</th></tr></thead><tbody>';
+  data.forEach((ch, i) => {
+    const reach = ch.participants_count && ch.avg_views ? ((ch.avg_views / ch.participants_count) * 100).toFixed(1) + '%' : '—';
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i+1);
+    html += `<tr onclick="window.location='/channel/${ch.channel_id}'" style="cursor:pointer">
+      <td><span class="rank">${medal}</span></td>
+      <td><strong>${ch.title || ch.username}</strong><br><span class="text-muted" style="font-size:11px;">@${ch.username}</span></td>
+      <td>${fmtNum(ch.participants_count)}</td>
+      <td><span class="badge badge-views">${fmtNum(ch.avg_views)}</span></td>
+      <td><span class="badge badge-er">${fmtPercent(ch.avg_er)}</span></td>
+      <td><span class="badge badge-posts">${ch.posts_7d}</span></td>
+      <td>${reach}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+async function loadTopPosts() {
+  const data = await api('/api/top/posts?limit=20');
+  const el = document.getElementById('topPostsTable');
+
+  if (!data || !data.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-text">Нет данных</div></div>';
+    return;
+  }
+
+  let html = '<table class="top-table"><thead><tr><th>#</th><th>Канал</th><th>Пост</th><th>👁️</th><th>🔄</th><th>📅</th></tr></thead><tbody>';
+  data.forEach((p, i) => {
+    html += `<tr onclick="window.location='/channel/${p.channel_id}'" style="cursor:pointer">
+      <td><span class="rank">${i+1}</span></td>
+      <td><strong>@${p.channel_username}</strong></td>
+      <td>${truncate(p.text, 100) || '<span class="text-muted">[медиа]</span>'}</td>
+      <td><span class="badge badge-views">${fmtNum(p.views)}</span></td>
+      <td>${fmtNum(p.forwards)}</td>
+      <td style="white-space:nowrap;">${fmtDate(p.date)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function switchTop(section) {
+  document.querySelectorAll('#topChannels, #topPosts').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(section).classList.remove('hidden');
+  document.querySelector(`.tab[onclick*="${section}"]`).classList.add('active');
+  if (section === 'topChannels') loadTopChannels();
+  else loadTopPosts();
+}
+
+loadTopChannels();
+loadTopPosts();
+</script>
+{% endblock %}
