@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}tgstat-opensource — Топы{% endblock %}
-{% block head %}<script src="/static/js/top.js"></script>{% endblock %}
 
 {% block content %}
 <h1 style="font-size: 24px; margin-bottom: 20px;">🏆 Рейтинги</h1>
@@ -42,7 +41,7 @@
 <script>
 async function loadTopChannels() {
   const sort = document.getElementById('topSort').value;
-  const data = await api('/api/rankings?sort_by=' + sort);
+  const data = await api('/api/rankings?sort_by=' + encodeURIComponent(sort));
   const el = document.getElementById('topChannelsTable');
 
   if (!data || !data.length) {
@@ -53,15 +52,15 @@ async function loadTopChannels() {
   let html = '<table class="top-table"><thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th><th>Охват %</th></tr></thead><tbody>';
   data.forEach((ch, i) => {
     const reach = ch.participants_count && ch.avg_views ? ((ch.avg_views / ch.participants_count) * 100).toFixed(1) + '%' : '—';
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i+1);
-    html += `<tr onclick="window.location='/channel/${ch.channel_id}'" style="cursor:pointer">
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : String(i + 1);
+    html += `<tr onclick="window.location='/channel/${Number(ch.channel_id)}'" style="cursor:pointer">
       <td><span class="rank">${medal}</span></td>
-      <td><strong>${ch.title || ch.username}</strong><br><span class="text-muted" style="font-size:11px;">@${ch.username}</span></td>
+      <td><strong>${escapeHtml(ch.title || ch.username || '')}</strong><br><span class="text-muted" style="font-size:11px;">@${escapeHtml(ch.username || '')}</span></td>
       <td>${fmtNum(ch.participants_count)}</td>
       <td><span class="badge badge-views">${fmtNum(ch.avg_views)}</span></td>
       <td><span class="badge badge-er">${fmtPercent(ch.avg_er)}</span></td>
-      <td><span class="badge badge-posts">${ch.posts_7d}</span></td>
-      <td>${reach}</td>
+      <td><span class="badge badge-posts">${escapeHtml(ch.posts_7d)}</span></td>
+      <td>${escapeHtml(reach)}</td>
     </tr>`;
   });
   html += '</tbody></table>';
@@ -79,13 +78,14 @@ async function loadTopPosts() {
 
   let html = '<table class="top-table"><thead><tr><th>#</th><th>Канал</th><th>Пост</th><th>👁️</th><th>🔄</th><th>📅</th></tr></thead><tbody>';
   data.forEach((p, i) => {
-    html += `<tr onclick="window.location='/channel/${p.channel_id}'" style="cursor:pointer">
+    const text = escapeHtml(truncate(p.text, 100));
+    html += `<tr onclick="window.location='/channel/${Number(p.channel_id)}'" style="cursor:pointer">
       <td><span class="rank">${i+1}</span></td>
-      <td><strong>@${p.channel_username}</strong></td>
-      <td>${truncate(p.text, 100) || '<span class="text-muted">[медиа]</span>'}</td>
+      <td><strong>@${escapeHtml(p.channel_username || '')}</strong></td>
+      <td>${text || '<span class="text-muted">[медиа]</span>'}</td>
       <td><span class="badge badge-views">${fmtNum(p.views)}</span></td>
       <td>${fmtNum(p.forwards)}</td>
-      <td style="white-space:nowrap;">${fmtDate(p.date)}</td>
+      <td style="white-space:nowrap;">${escapeHtml(fmtDate(p.date))}</td>
     </tr>`;
   });
   html += '</tbody></table>';

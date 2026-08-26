@@ -103,9 +103,12 @@ class Collector:
                 if not isinstance(message, Message):
                     continue
 
-                # Проверяем, есть ли уже
-                existing = await session.get(Post, message.id)
+                # PK = (channel_id, telegram message.id)
+                existing = await session.get(Post, (channel_id, message.id))
                 if existing:
+                    # Обновляем метрики у уже сохранённого поста
+                    existing.views = getattr(message, "views", None)
+                    existing.forwards = getattr(message, "forwards", None)
                     continue
 
                 post = Post(
@@ -132,23 +135,36 @@ class Collector:
     async def find_mentions(self, target_username: str, limit: int = 1000) -> list:
         """Поиск сообщений, упоминающих канал (по username)."""
         mentions = []
+        username = target_username.lstrip("@").lower()
         db_url = get_database_url()
         engine = create_async_engine_from_url(db_url)
         async with get_session_factory(engine)() as session:
+            # Резолвим целевой канал в БД
+            target = await session.execute(
+                select(Channel).where(func.lower(Channel.username) == username)
+            )
+            target_ch = target.scalar_one_or_none()
+            if not target_ch:
+                logger.warning("Канал @%s не найден в БД — упоминания не сохраняем", username)
+                await engine.dispose()
+                return []
+
             async for dialog in self.client.iter_dialogs():
                 if not isinstance(dialog.entity, TLChannel):
                     continue
-                if dialog.entity.username and dialog.entity.username.lower() == target_username.lower():
+                if dialog.entity.username and dialog.entity.username.lower() == username:
                     continue  # пропускаем сам канал
 
-                async for msg in self.client.iter_messages(dialog.entity, limit=limit // 50):
+                async for msg in self.client.iter_messages(dialog.entity, limit=max(limit // 50, 1)):
                     if not msg.text:
                         continue
-                    if f"@{target_username}" in msg.text or f"t.me/{target_username}" in msg.text:
+                    if f"@{username}" in msg.text.lower() or f"t.me/{username}" in msg.text.lower():
+                        # source_channel_id / source_message_id без FK — источник
+                        # может ещё не быть в нашей таблице channels/posts
                         mention = Mention(
-                            target_channel_id=0,  # заполним позже
-                            source_channel_id=dialog.id,
-                            source_post_id=msg.id,
+                            target_channel_id=target_ch.id,
+                            source_channel_id=dialog.entity.id,
+                            source_message_id=msg.id,
                             date=msg.date,
                             text=msg.text[:500],
                             mention_type="link",
@@ -157,7 +173,7 @@ class Collector:
                         mentions.append(mention)
 
             await session.commit()
-            logger.info("🔗 Найдено %d упоминаний @%s", len(mentions), target_username)
+            logger.info("🔗 Найдено %d упоминаний @%s", len(mentions), username)
 
         await engine.dispose()
         return mentions
@@ -228,6 +244,7 @@ class Collector:
                 .group_by(cast(Post.date, Date))
             )
 
+            days_updated = 0
             for row in result:
                 existing = await session.execute(
                     select(DailyStats).where(
@@ -235,10 +252,9 @@ class Collector:
                         cast(DailyStats.date, Date) == row.day
                     )
                 )
-                if existing.scalar_one_or_none():
-                    continue
+                ds = existing.scalar_one_or_none()
 
-                # Берём участников из ChannelStats на дату дня (снапшот), а не текущий participants_count
+                # Берём участников из ChannelStats на дату дня (снапшот)
                 subs = 0
                 cs = await session.execute(
                     select(ChannelStats).where(
@@ -254,21 +270,30 @@ class Collector:
                 if subs > 0 and row.total_views:
                     er = (row.total_views + (row.total_forwards or 0)) / subs * 100
 
-                ds = DailyStats(
-                    channel_id=channel_id,
-                    date=row.day,
-                    posts_count=row.cnt,
-                    total_views=row.total_views or 0,
-                    avg_views=row.avg_views,
-                    total_forwards=row.total_forwards or 0,
-                    avg_forwards=row.avg_forwards,
-                    engagement_rate=round(er, 2) if er else None,
-                    participants_count=subs,
-                )
-                session.add(ds)
+                if ds:
+                    ds.posts_count = row.cnt
+                    ds.total_views = row.total_views or 0
+                    ds.avg_views = row.avg_views
+                    ds.total_forwards = row.total_forwards or 0
+                    ds.avg_forwards = row.avg_forwards
+                    ds.engagement_rate = round(er, 2) if er else None
+                    ds.participants_count = subs
+                else:
+                    session.add(DailyStats(
+                        channel_id=channel_id,
+                        date=row.day,
+                        posts_count=row.cnt,
+                        total_views=row.total_views or 0,
+                        avg_views=row.avg_views,
+                        total_forwards=row.total_forwards or 0,
+                        avg_forwards=row.avg_forwards,
+                        engagement_rate=round(er, 2) if er else None,
+                        participants_count=subs,
+                    ))
+                days_updated += 1
 
             await session.commit()
-            logger.info("📊 Статистика за %d дней обновлена для канала #%d", result.rowcount, channel_id)
+            logger.info("📊 Статистика за %d дней обновлена для канала #%d", days_updated, channel_id)
 
         await engine.dispose()
 

@@ -63,10 +63,12 @@ class ChannelStats(Base):
 
 
 class Post(Base):
+    """Пост канала. PK = (channel_id, id): Telegram message.id уникален только внутри чата."""
+
     __tablename__ = "posts"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=False)
-    channel_id = Column(BigInteger, ForeignKey("channels.id"), nullable=False, index=True)
+    channel_id = Column(BigInteger, ForeignKey("channels.id"), primary_key=True, nullable=False)
+    id = Column(BigInteger, primary_key=True, autoincrement=False)  # telegram message id
     date = Column(DateTime, nullable=False, index=True)
     text = Column(Text, nullable=True)
     views = Column(Integer, nullable=True)
@@ -81,12 +83,14 @@ class Post(Base):
 
 
 class Mention(Base):
+    """Упоминание канала. source_* без FK: источник может отсутствовать в channels/posts."""
+
     __tablename__ = "mentions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     target_channel_id = Column(BigInteger, ForeignKey("channels.id"), nullable=False, index=True)
-    source_channel_id = Column(BigInteger, ForeignKey("channels.id"), nullable=True)
-    source_post_id = Column(BigInteger, ForeignKey("posts.id"), nullable=True)
+    source_channel_id = Column(BigInteger, nullable=True, index=True)
+    source_message_id = Column(BigInteger, nullable=True)  # telegram msg id в source-канале
     date = Column(DateTime, nullable=False)
     text = Column(Text, nullable=True)
     mention_type = Column(String(32), default="link")  # link, forward, text
@@ -97,6 +101,9 @@ class Mention(Base):
 
 class DailyStats(Base):
     __tablename__ = "daily_stats"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "date", name="uq_daily_stats_channel_date"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     channel_id = Column(BigInteger, ForeignKey("channels.id"), nullable=False, index=True)

@@ -4,6 +4,16 @@
 
 // ── Helpers ────────────────────────────────────────────────
 
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function fmtNum(n) {
   if (n === null || n === undefined) return '—';
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';

@@ -11,7 +11,7 @@
 {% block scripts %}
 <script>
 async function loadChannel() {
-  const channelId = {{ channel_id }};
+  const channelId = {{ channel_id | int }};
 
   const [ch, stats, subs, posts] = await Promise.all([
     api('/api/channels/' + channelId),
@@ -28,15 +28,18 @@ async function loadChannel() {
 
   const latest = stats && stats.length ? stats[stats.length - 1] : null;
   const er = latest ? latest.engagement_rate : (ch.avg_er || 0);
-  const cpm = ch.participants_count ? (ch.participants_count * 0.005 * (latest ? latest.avg_views / 1000 : 0)).toFixed(2) : 0;
+  const avgViews = latest && latest.avg_views != null ? Number(latest.avg_views) : 0;
+  const cpm = ch.participants_count
+    ? (ch.participants_count * 0.005 * (avgViews / 1000)).toFixed(2)
+    : '0';
 
   let html = `
     <div class="channel-header">
       <div class="channel-avatar">📢</div>
       <div class="channel-info">
-        <h1>${ch.title || 'Без названия'}</h1>
-        <div class="username">@${ch.username || '—'}</div>
-        <div class="description">${ch.description || 'Нет описания'}</div>
+        <h1>${escapeHtml(ch.title || 'Без названия')}</h1>
+        <div class="username">@${escapeHtml(ch.username || '—')}</div>
+        <div class="description">${escapeHtml(ch.description || 'Нет описания')}</div>
         <div class="channel-metrics">
           <div class="metric">
             <div class="metric-value">${fmtNum(ch.participants_count)}</div>
@@ -47,7 +50,7 @@ async function loadChannel() {
             <div class="metric-label">🎯 ER</div>
           </div>
           <div class="metric">
-            <div class="metric-value">$${cpm}</div>
+            <div class="metric-value">$${escapeHtml(cpm)}</div>
             <div class="metric-label">💰 CPM (оценка)</div>
           </div>
           <div class="metric">
@@ -99,28 +102,28 @@ async function loadChannel() {
         <div class="card">
           <h3>Основное</h3>
           <table>
-            <tr><td style="color:var(--text-muted)">ID канала</td><td>${ch.id}</td></tr>
-            <tr><td style="color:var(--text-muted)">Username</td><td>@${ch.username || '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Язык</td><td>${ch.language || '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Категория</td><td>${ch.category || '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Страна</td><td>${ch.country || '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Отслеживается с</td><td>${fmtDate(ch.first_seen)}</td></tr>
+            <tr><td style="color:var(--text-muted)">ID канала</td><td>${escapeHtml(ch.id)}</td></tr>
+            <tr><td style="color:var(--text-muted)">Username</td><td>@${escapeHtml(ch.username || '—')}</td></tr>
+            <tr><td style="color:var(--text-muted)">Язык</td><td>${escapeHtml(ch.language || '—')}</td></tr>
+            <tr><td style="color:var(--text-muted)">Категория</td><td>${escapeHtml(ch.category || '—')}</td></tr>
+            <tr><td style="color:var(--text-muted)">Страна</td><td>${escapeHtml(ch.country || '—')}</td></tr>
+            <tr><td style="color:var(--text-muted)">Отслеживается с</td><td>${escapeHtml(fmtDate(ch.first_seen))}</td></tr>
           </table>
         </div>
         <div class="card">
           <h3>Активность (30 дней)</h3>
           <table>
-            <tr><td style="color:var(--text-muted)">Всего постов</td><td>${stats ? stats.reduce((s, d) => s + d.posts_count, 0) : '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Средн. просмотров</td><td>${stats ? fmtNum(stats.reduce((s, d) => s + d.total_views, 0) / stats.length) : '—'}</td></tr>
-            <tr><td style="color:var(--text-muted)">Всего упоминаний</td><td>${stats ? stats.reduce((s, d) => s + d.mentions_count, 0) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Всего постов</td><td>${stats ? escapeHtml(stats.reduce((s, d) => s + d.posts_count, 0)) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Средн. просмотров</td><td>${stats && stats.length ? fmtNum(stats.reduce((s, d) => s + d.total_views, 0) / stats.length) : '—'}</td></tr>
+            <tr><td style="color:var(--text-muted)">Всего упоминаний</td><td>${stats ? escapeHtml(stats.reduce((s, d) => s + d.mentions_count, 0)) : '—'}</td></tr>
             <tr><td style="color:var(--text-muted)">Средний ER</td><td>${fmtPercent(er)}</td></tr>
           </table>
         </div>
         <div class="card">
           <h3>Последнее обновление</h3>
           <table>
-            <tr><td style="color:var(--text-muted)">Последний сбор</td><td>${fmtDateTime(ch.last_scraped)}</td></tr>
-            <tr><td style="color:var(--text-muted)">Источник данных</td><td><span class="badge badge-views">Демо</span></td></tr>
+            <tr><td style="color:var(--text-muted)">Последний сбор</td><td>${escapeHtml(fmtDateTime(ch.last_scraped))}</td></tr>
+            <tr><td style="color:var(--text-muted)">Источник данных</td><td><span class="badge badge-views">API</span></td></tr>
           </table>
         </div>
       </div>
@@ -143,12 +146,13 @@ async function loadChannel() {
   if (posts && posts.length) {
     let phtml = '<table><thead><tr><th>Дата</th><th>👁️</th><th>🔄</th><th>Текст</th><th>📎</th></tr></thead><tbody>';
     posts.forEach(p => {
+      const text = escapeHtml(truncate(p.text, 100));
       phtml += `<tr>
-        <td style="white-space:nowrap;">${fmtDateTime(p.date)}</td>
+        <td style="white-space:nowrap;">${escapeHtml(fmtDateTime(p.date))}</td>
         <td>${fmtNum(p.views)}</td>
         <td>${fmtNum(p.forwards)}</td>
-        <td>${truncate(p.text, 100) || '<span class="text-muted">[медиа]</span>'}</td>
-        <td>${p.has_media ? (p.media_type || '📎') : '—'}</td>
+        <td>${text || '<span class="text-muted">[медиа]</span>'}</td>
+        <td>${p.has_media ? escapeHtml(p.media_type || '📎') : '—'}</td>
       </tr>`;
     });
     phtml += '</tbody></table>';
