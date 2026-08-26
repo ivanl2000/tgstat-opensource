@@ -9,3 +9,7 @@ DATABASE_URL=sqlite+aiosqlite:///data/tgstat.db
 # Веб-сервер
 HOST=0.0.0.0
 PORT=8080
+
+# Токен для POST /api/collect (обязателен; без него эндпоинт отключён)
+# Заголовок: X-API-Token: <токен>  или  Authorization: Bearer <токен>
+COLLECT_API_TOKEN=замените_на_случайный_секрет

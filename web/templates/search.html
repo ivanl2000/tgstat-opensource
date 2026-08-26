@@ -19,7 +19,7 @@
     <div class="loading">Поиск…</div>
 </div>
 {% else %}
-<div class="empty-state">
+<div class="empty-state" id="searchEmpty">
     <div class="empty-state-icon">🔍</div>
     <div class="empty-state-text">Введите запрос для поиска по каналам</div>
 </div>
@@ -27,9 +27,8 @@
 {% endblock %}
 
 {% block scripts %}
-{% if query %}
 <script>
-async function doSearch() {
+function doSearch() {
   const q = document.getElementById('searchInput').value.trim();
   if (!q) return;
   window.location.href = '/search?q=' + encodeURIComponent(q);
@@ -37,25 +36,28 @@ async function doSearch() {
 
 async function loadResults() {
   const urlParams = new URLSearchParams(window.location.search);
-  const q = urlParams.get('q') || '{{ query }}';
+  const q = urlParams.get('q');
+  if (!q) return;
+
+  const el = document.getElementById('searchResults');
+  if (!el) return;
 
   const [channels, posts] = await Promise.all([
     api('/api/search?q=' + encodeURIComponent(q)),
     api('/api/search/posts?q=' + encodeURIComponent(q) + '&limit=10'),
   ]);
 
-  const el = document.getElementById('searchResults');
   let html = '';
 
   // Channels
   if (channels && channels.length) {
     html += '<h2 class="mb-16">📺 Каналы <span class="text-muted" style="font-size:13px;">(' + channels.length + ')</span></h2>';
     channels.forEach(ch => {
-      html += `<div class="search-result-item" onclick="window.location='/channel/${ch.id}'">
-        <div class="search-result-title">${ch.title || ch.username}</div>
+      html += `<div class="search-result-item" onclick="window.location='/channel/${Number(ch.id)}'">
+        <div class="search-result-title">${escapeHtml(ch.title || ch.username || '')}</div>
         <div class="search-result-meta">
-          @${ch.username} · 👥 ${fmtNum(ch.participants_count)} ·
-          <span class="badge badge-category">${ch.category || 'Разное'}</span>
+          @${escapeHtml(ch.username || '')} · 👥 ${fmtNum(ch.participants_count)} ·
+          <span class="badge badge-category">${escapeHtml(ch.category || 'Разное')}</span>
         </div>
       </div>`;
     });
@@ -65,23 +67,27 @@ async function loadResults() {
   if (posts && posts.length) {
     html += '<h2 class="mb-16 mt-16">📝 Посты <span class="text-muted" style="font-size:13px;">(' + posts.length + ')</span></h2>';
     posts.forEach(p => {
-      html += `<div class="search-result-item" onclick="window.location='/channel/${p.channel_id}'">
-        <div class="search-result-title">${truncate(p.text, 120) || '<span class="text-muted">[медиа]</span>'}</div>
+      const text = escapeHtml(truncate(p.text, 120));
+      html += `<div class="search-result-item" onclick="window.location='/channel/${Number(p.channel_id)}'">
+        <div class="search-result-title">${text || '<span class="text-muted">[медиа]</span>'}</div>
         <div class="search-result-meta">
-          @${p.channel_username} · 👁️ ${fmtNum(p.views)} · 📅 ${fmtDate(p.date)}
+          @${escapeHtml(p.channel_username || '')} · 👁️ ${fmtNum(p.views)} · 📅 ${escapeHtml(fmtDate(p.date))}
         </div>
       </div>`;
     });
   }
 
-  if (!channels || !channels.length && (!posts || !posts.length)) {
-    html += '<div class="empty-state"><div class="empty-state-icon">😕</div><div class="empty-state-text">Ничего не найдено по запросу «{{ query }}»</div></div>';
+  const noChannels = !channels || !channels.length;
+  const noPosts = !posts || !posts.length;
+  if (noChannels && noPosts) {
+    html += '<div class="empty-state"><div class="empty-state-icon">😕</div><div class="empty-state-text">Ничего не найдено по запросу «' + escapeHtml(q) + '»</div></div>';
   }
 
   el.innerHTML = html;
 }
 
+{% if query %}
 loadResults();
-</script>
 {% endif %}
+</script>
 {% endblock %}

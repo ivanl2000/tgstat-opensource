@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block title %}tgstat-opensource — Аналитика Telegram-каналов{% endblock %}
-{% block head %}
-<script src="/static/js/index.js"></script>
-{% endblock %}
 
 {% block content %}
 <!-- Строка поиска (large) -->
@@ -94,13 +91,15 @@ async function loadIndex() {
   if (rankings && rankings.length) {
     let html = '<table><thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th></tr></thead><tbody>';
     rankings.slice(0, 15).forEach((ch, i) => {
-      html += `<tr onclick="window.location='/channel/${ch.channel_id}'" style="cursor:pointer">
+      const title = escapeHtml(ch.title || ch.username || '');
+      const username = escapeHtml(ch.username || '');
+      html += `<tr onclick="window.location='/channel/${Number(ch.channel_id)}'" style="cursor:pointer">
         <td>${i+1}</td>
-        <td><strong>${ch.title || ch.username}</strong><br><span class="text-muted" style="font-size:11px;">@${ch.username}</span></td>
+        <td><strong>${title}</strong><br><span class="text-muted" style="font-size:11px;">@${username}</span></td>
         <td>${fmtNum(ch.participants_count)}</td>
         <td><span class="badge badge-views">${fmtNum(ch.avg_views)}</span></td>
         <td><span class="badge badge-er">${fmtPercent(ch.avg_er)}</span></td>
-        <td>${ch.posts_7d}</td>
+        <td>${escapeHtml(ch.posts_7d)}</td>
       </tr>`;
     });
     html += '</tbody></table>';
@@ -125,12 +124,14 @@ async function loadIndex() {
   if (topPosts && topPosts.length) {
     let html = '<table><thead><tr><th>Канал</th><th>Пост</th><th>👁️</th><th>🔄</th><th>📅</th></tr></thead><tbody>';
     topPosts.forEach(p => {
-      html += `<tr onclick="window.location='/channel/${p.channel_id}'" style="cursor:pointer">
-        <td>@${p.channel_username}</td>
-        <td>${truncate(p.text, 80) || '<i class="text-muted">[медиа]</i>'}</td>
+      const uname = escapeHtml(p.channel_username || '');
+      const text = escapeHtml(truncate(p.text, 80));
+      html += `<tr onclick="window.location='/channel/${Number(p.channel_id)}'" style="cursor:pointer">
+        <td>@${uname}</td>
+        <td>${text || '<i class="text-muted">[медиа]</i>'}</td>
         <td>${fmtNum(p.views)}</td>
         <td>${fmtNum(p.forwards)}</td>
-        <td style="white-space:nowrap;">${fmtDate(p.date)}</td>
+        <td style="white-space:nowrap;">${escapeHtml(fmtDate(p.date))}</td>
       </tr>`;
     });
     html += '</tbody></table>';
@@ -145,9 +146,9 @@ async function loadIndex() {
   if (cats && cats.length) {
     catEl.innerHTML = cats.map(c =>
       `<a href="/catalog?category=${encodeURIComponent(c.name)}" class="channel-card" style="flex:1; min-width:140px; text-align:center;">
-         <div style="font-size:28px; margin-bottom:6px;">${c.icon}</div>
-         <div style="font-weight:600; font-size:14px;">${c.name}</div>
-         <div class="text-muted" style="font-size:12px;">${c.count} каналов</div>
+         <div style="font-size:28px; margin-bottom:6px;">${escapeHtml(c.icon)}</div>
+         <div style="font-weight:600; font-size:14px;">${escapeHtml(c.name)}</div>
+         <div class="text-muted" style="font-size:12px;">${escapeHtml(c.count)} каналов</div>
        </a>`
     ).join('');
   }

@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}tgstat-opensource — Каталог каналов{% endblock %}
-{% block head %}<script src="/static/js/catalog.js"></script>{% endblock %}
 
 {% block content %}
 <h1 style="font-size: 24px; margin-bottom: 20px;">📂 Каталог каналов</h1>
@@ -34,7 +33,6 @@
 
 {% block scripts %}
 <script>
-// catalog.js inline to avoid extra request
 const ITEMS_PER_PAGE = 24;
 let allChannels = [];
 let filteredChannels = [];
@@ -56,7 +54,7 @@ async function loadCatalog() {
 
   allChannels = channels.map(ch => ({
     ...ch,
-    category: (rankMap[ch.id] && rankMap[ch.id].category) || 'Разное',
+    category: (rankMap[ch.id] && rankMap[ch.id].category) || ch.category || 'Разное',
     avg_views: (rankMap[ch.id] && rankMap[ch.id].avg_views) || 0,
     avg_er: (rankMap[ch.id] && rankMap[ch.id].avg_er) || 0,
     language: ch.language || 'ru',
@@ -70,6 +68,13 @@ async function loadCatalog() {
     opt.value = c; opt.textContent = c;
     catSelect.appendChild(opt);
   });
+
+  // Deep-link: /catalog?category=…
+  const urlCat = new URLSearchParams(window.location.search).get('category');
+  if (urlCat) {
+    const match = [...catSelect.options].find(o => o.value === urlCat);
+    if (match) catSelect.value = urlCat;
+  }
 
   applyFilters();
 }
@@ -111,10 +116,10 @@ function renderPage() {
   }
 
   grid.innerHTML = pageItems.map(ch => `
-    <div class="channel-card" onclick="window.location='/channel/${ch.id}'">
-      <span class="channel-card-category">${ch.category || 'Разное'}</span>
-      <div class="channel-card-title">${ch.title || ch.username}</div>
-      <div class="channel-card-username">@${ch.username}</div>
+    <div class="channel-card" onclick="window.location='/channel/${Number(ch.id)}'">
+      <span class="channel-card-category">${escapeHtml(ch.category || 'Разное')}</span>
+      <div class="channel-card-title">${escapeHtml(ch.title || ch.username || '')}</div>
+      <div class="channel-card-username">@${escapeHtml(ch.username || '')}</div>
       <div class="channel-card-stats">
         <span class="channel-card-stat">👥 ${fmtNum(ch.participants_count)}</span>
         <span class="channel-card-stat">👁️ ${fmtNum(ch.avg_views)}</span>
@@ -132,12 +137,17 @@ function renderPagination(total) {
   if (totalPages <= 1) { el.innerHTML = ''; return; }
 
   let html = '';
+  let skipped = false;
   for (let i = 1; i <= totalPages; i++) {
     if (i > 1 && i < totalPages && Math.abs(i - currentPage) > 2) {
-      if (html.slice(-7) !== '…</button>') html += '<button class="page-btn disabled">…</button>';
+      if (!skipped) {
+        html += '<button class="page-btn disabled" type="button">…</button>';
+        skipped = true;
+      }
       continue;
     }
-    html += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="goPage(${i})">${i}</button>`;
+    skipped = false;
+    html += `<button class="page-btn ${i === currentPage ? 'active' : ''}" type="button" onclick="goPage(${i})">${i}</button>`;
   }
   el.innerHTML = html;
 }

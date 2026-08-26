@@ -23,28 +23,25 @@
 """
 
 import os
-import sys
-import random
 import logging
 from datetime import datetime, date, timedelta
 from typing import Optional
 from pathlib import Path
+from secrets import compare_digest
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from sqlalchemy import select, func, cast, Date, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 
 from db import get_database_url, init_db, get_session_factory
 from db.schema import Channel, ChannelStats, Post, Mention, DailyStats, create_async_engine_from_url
 
 # ── Эмуляция (демо-данные, пока БД пуста) ─────────────────────────
 from api.emulation import (
-    should_use_emulation,
     generate_all_channels,
     generate_channel_detail,
     generate_daily_stats,
@@ -55,7 +52,6 @@ from api.emulation import (
     search_posts_emulated,
     search_mentions_emulated,
     generate_top_posts,
-    CATEGORIES,
     CATEGORY_LIST,
 )
 
@@ -187,13 +183,36 @@ class EmulationCheck:
             cls._cache = empty
             cls._cache_time = datetime.utcnow()
             return empty
-        except Exception:
-            return True
+        except Exception as e:
+            logger.exception("Не удалось проверить БД для эмуляции: %s", e)
+            raise HTTPException(status_code=503, detail="Database unavailable")
 
     @classmethod
     def invalidate_cache(cls):
         cls._cache = None
         cls._cache_time = None
+
+
+def _require_collect_token(
+    x_api_token: Optional[str] = None,
+    authorization: Optional[str] = None,
+) -> None:
+    """Защита POST /api/collect: нужен COLLECT_API_TOKEN в env."""
+    expected = os.getenv("COLLECT_API_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Сбор через API отключён. Задайте COLLECT_API_TOKEN в .env",
+        )
+    provided = (x_api_token or "").strip()
+    if not provided and authorization:
+        auth = authorization.strip()
+        if auth.lower().startswith("bearer "):
+            provided = auth[7:].strip()
+        else:
+            provided = auth
+    if not provided or not compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Неверный или отсутствующий токен")
 
 
 # ── Эндпоинты API ──────────────────────────────────────────────────
@@ -538,8 +557,14 @@ async def list_categories():
 
 
 @app.post("/api/collect")
-async def trigger_collect(channel_username: str):
-    """Запустить сбор данных для канала (асинхронно)."""
+async def trigger_collect(
+    channel_username: str,
+    x_api_token: Optional[str] = Header(default=None, alias="X-API-Token"),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Запустить сбор данных для канала (требует COLLECT_API_TOKEN)."""
+    _require_collect_token(x_api_token, authorization)
+
     from collector import Collector
     api_id = os.getenv("TELEGRAM_API_ID")
     api_hash = os.getenv("TELEGRAM_API_HASH")
@@ -578,8 +603,9 @@ async def trigger_collect(channel_username: str):
 async def index(request: Request):
     """Главная страница."""
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "active_page": "index"}
+        {"active_page": "index"},
     )
 
 
@@ -587,8 +613,9 @@ async def index(request: Request):
 async def catalog(request: Request):
     """Каталог каналов."""
     return templates.TemplateResponse(
+        request,
         "catalog.html",
-        {"request": request, "active_page": "catalog"}
+        {"active_page": "catalog"},
     )
 
 
@@ -596,8 +623,9 @@ async def catalog(request: Request):
 async def channel_page(request: Request, channel_id: int):
     """Страница канала."""
     return templates.TemplateResponse(
+        request,
         "channel.html",
-        {"request": request, "channel_id": channel_id, "active_page": ""}
+        {"channel_id": channel_id, "active_page": ""},
     )
 
 
@@ -605,8 +633,9 @@ async def channel_page(request: Request, channel_id: int):
 async def top_page(request: Request):
     """Топы / Рейтинги."""
     return templates.TemplateResponse(
+        request,
         "top.html",
-        {"request": request, "active_page": "top"}
+        {"active_page": "top"},
     )
 
 
@@ -614,8 +643,9 @@ async def top_page(request: Request):
 async def search_page(request: Request, q: str = ""):
     """Поиск по каналам и постам."""
     return templates.TemplateResponse(
+        request,
         "search.html",
-        {"request": request, "query": q, "active_page": ""}
+        {"query": q, "active_page": ""},
     )
 
 

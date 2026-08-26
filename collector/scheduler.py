@@ -7,6 +7,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 import yaml
 
+from sqlalchemy import select
+
 from collector import Collector
 from db import get_database_url, init_db, get_session_factory
 from db.schema import Channel, create_async_engine_from_url
@@ -15,7 +17,13 @@ load_dotenv()
 logger = logging.getLogger("tgstat.scheduler")
 
 
-async def run_collection(collector: Collector, channel_username: str):
+async def run_collection(
+    collector: Collector,
+    channel_username: str,
+    *,
+    messages_per_run: int = 200,
+    history_depth: int = 7,
+):
     """Собрать данные для одного канала."""
     entity = await collector.resolve_channel(channel_username)
     if not entity:
@@ -30,7 +38,9 @@ async def run_collection(collector: Collector, channel_username: str):
     await engine.dispose()
 
     logger.info("📡 %s: сбор постов…", entity.title)
-    await collector.collect_posts(entity.id, limit=200, offset_days=7)
+    await collector.collect_posts(
+        entity.id, limit=messages_per_run, offset_days=history_depth
+    )
 
     logger.info("📊 %s: расчёт статистики…", entity.title)
     await collector.calculate_daily_stats(entity.id)
@@ -82,7 +92,12 @@ async def scheduler_loop():
 
             for ch_username in channels:
                 try:
-                    await run_collection(collector, ch_username.strip())
+                    await run_collection(
+                        collector,
+                        ch_username.strip(),
+                        messages_per_run=messages_per_run,
+                        history_depth=history_depth,
+                    )
                 except Exception as e:
                     logger.error("❌ Ошибка при сборе %s: %s", ch_username, e)
 

@@ -54,6 +54,7 @@
     <div class="card full mb-16">
         <div class="flex">
             <input type="text" id="channelInput" placeholder="@channel_name" />
+            <input type="password" id="collectToken" placeholder="COLLECT_API_TOKEN" title="Токен для POST /api/collect" />
             <button class="btn btn-primary btn-sm" onclick="addChannel()">➕ Добавить канал</button>
             <span class="status">или выбери из списка</span>
         </div>
@@ -126,10 +127,20 @@
 let charts = { views: null, er: null, subs: null };
 let selectedChannelId = null;
 
+function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // ── Загрузка рейтинга ──
 async function loadRankings() {
     const sortBy = document.getElementById('sortBy').value;
-    const res = await fetch(`/api/rankings?sort_by=${sortBy}`);
+    const res = await fetch(`/api/rankings?sort_by=${encodeURIComponent(sortBy)}`);
     const data = await res.json();
     const el = document.getElementById('rankingsTable');
 
@@ -141,16 +152,14 @@ async function loadRankings() {
     let html = `<table>
         <thead><tr><th>#</th><th>Канал</th><th>Подписчики</th><th>Avg Views</th><th>ER</th><th>Постов/7д</th><th></th></tr></thead><tbody>`;
     data.forEach((ch, i) => {
-        const viewRate = ch.participants_count && ch.avg_views
-            ? ((ch.avg_views / ch.participants_count) * 100).toFixed(1) + '%'
-            : '—';
-        html += `<tr onclick="selectChannel(${ch.channel_id}, '${ch.username || ''}')" style="cursor:pointer;">
+        const title = escapeHtml(ch.title || ch.username || '#' + ch.channel_id);
+        html += `<tr onclick="selectChannel(${Number(ch.channel_id)})" style="cursor:pointer;">
             <td>${i + 1}</td>
-            <td><strong>${ch.title || ch.username || '#' + ch.channel_id}</strong></td>
+            <td><strong>${title}</strong></td>
             <td>${ch.participants_count?.toLocaleString() || '—'}</td>
             <td><span class="badge views">${ch.avg_views?.toLocaleString() || '—'}</span></td>
             <td><span class="badge er">${ch.avg_er ? ch.avg_er.toFixed(2) + '%' : '—'}</span></td>
-            <td><span class="badge posts">${ch.posts_7d}</span></td>
+            <td><span class="badge posts">${escapeHtml(ch.posts_7d)}</span></td>
             <td>📊</td>
         </tr>`;
     });
@@ -159,13 +168,13 @@ async function loadRankings() {
 }
 
 // ── Выбор канала ──
-async function selectChannel(channelId, username) {
+async function selectChannel(channelId) {
     selectedChannelId = channelId;
     document.getElementById('chartCard').style.display = 'block';
     document.getElementById('erCard').style.display = 'block';
     document.getElementById('subsCard').style.display = 'block';
     document.getElementById('postsCard').style.display = 'block';
-    document.getElementById('chartTitle').textContent = `📈 ${username ? '@' + username : '#' + channelId} — Просмотры по дням`;
+    document.getElementById('chartTitle').textContent = `📈 #${channelId} — Просмотры по дням`;
     await loadChannelStats();
     await loadSubscribers();
     await loadPosts();
@@ -236,11 +245,22 @@ async function loadSubscribers() {
     const res = await fetch(`/api/channels/${selectedChannelId}/subscribers?days=30`);
     const data = await res.json();
 
+    const canvas = document.getElementById('subsChart');
+    if (!canvas) return;
+
     if (!data.length) {
-        const el = document.getElementById('subsCard');
-        el.innerHTML = '<div class="empty">Нет данных о подписчиках</div>';
+        if (charts.subs) { charts.subs.destroy(); charts.subs = null; }
+        const wrap = canvas.parentElement;
+        if (wrap) {
+            wrap.innerHTML = '<div class="empty" id="subsEmpty">Нет данных о подписчиках</div><canvas id="subsChart" style="display:none;"></canvas>';
+        }
         return;
     }
+
+    // Восстанавливаем canvas, если ранее показали empty
+    const empty = document.getElementById('subsEmpty');
+    if (empty) empty.remove();
+    canvas.style.display = '';
 
     const labels = data.map(d => d.date);
     const subs = data.map(d => d.participants_count);
@@ -282,8 +302,9 @@ async function loadPosts() {
 
     let html = '<table><thead><tr><th>Дата</th><th>Просмотры</th><th>Текст</th></tr></thead><tbody>';
     data.forEach(p => {
-        const dt = new Date(p.date).toLocaleString('ru');
-        const text = (p.text || '').substring(0, 100) + ((p.text || '').length > 100 ? '…' : '');
+        const dt = escapeHtml(new Date(p.date).toLocaleString('ru'));
+        const raw = p.text || '';
+        const text = escapeHtml(raw.substring(0, 100) + (raw.length > 100 ? '…' : ''));
         html += `<tr><td style="white-space:nowrap;">${dt}</td>
             <td>${p.views?.toLocaleString() || '—'}</td>
             <td>${text || '<i style="color:#999;">[медиа]</i>'}</td></tr>`;
@@ -307,10 +328,10 @@ async function searchMentions() {
 
     let html = `<table><thead><tr><th>Дата</th><th>Текст</th><th>Тип</th></tr></thead><tbody>`;
     data.forEach(m => {
-        const dt = new Date(m.date).toLocaleString('ru');
+        const dt = escapeHtml(new Date(m.date).toLocaleString('ru'));
         html += `<tr><td style="white-space:nowrap;">${dt}</td>
-            <td>${m.text || ''}</td>
-            <td>${m.mention_type}</td></tr>`;
+            <td>${escapeHtml(m.text || '')}</td>
+            <td>${escapeHtml(m.mention_type)}</td></tr>`;
     });
     html += '</tbody></table>';
     el.innerHTML = html;
@@ -319,13 +340,21 @@ async function searchMentions() {
 // ── Добавление канала ──
 async function addChannel() {
     const username = document.getElementById('channelInput').value.trim();
+    const token = document.getElementById('collectToken').value.trim();
     if (!username) return;
+    if (!token) {
+        alert('❌ Укажите COLLECT_API_TOKEN');
+        return;
+    }
     const btn = document.querySelector('.btn-primary');
     btn.disabled = true;
     btn.textContent = '⏳ Сбор…';
 
     try {
-        const res = await fetch(`/api/collect?channel_username=${encodeURIComponent(username)}`, { method: 'POST' });
+        const res = await fetch(`/api/collect?channel_username=${encodeURIComponent(username)}`, {
+            method: 'POST',
+            headers: { 'X-API-Token': token },
+        });
         const result = await res.json();
         if (res.ok) {
             alert(`✅ Канал @${result.channel} добавлен!`);
